@@ -1,2 +1,5 @@
 state/
 node_modules/
+.claude/
+.claudeignore
+.harnesskit/

@@ -13,17 +13,18 @@ const excess = Q.excess, S = Q.S, qmin = Q.qmin;
 const utcDay = t => new Date(t).toISOString().slice(0, 10);
 
 /**
- * Best (distance d, size x ≤ maxSize) per minute. With `floor` > 0 a quote whose expected daily
- * reward is below the payout floor earns nothing (Polymarket doesn't pay < $1/day per market).
+ * Best quote for a USDC `budget`, per minute of expected value, over three modes:
+ *   two  — BUY YES @ mid−d and BUY NO @ 1−(mid+d): full score, costs ≈ (1 − 2d)·x
+ *   yes  — BUY YES only: 1/c = 1/3 of the score, costs only (mid − d)·x      (mid ∈ [0.10, 0.90])
+ *   no   — BUY NO only:  1/3 of the score, costs only (1 − mid − d)·x        (mid ∈ [0.10, 0.90])
+ * One-sided quotes are far cheaper on skewed markets, letting a small bankroll cover more pools.
+ * With `floor` > 0 a quote whose expected daily reward is below it earns nothing.
  */
-function optimalQuote(mk, C, sigMinC, mid, maxSize, model, floor = 0) {
-  const v = mk.v, rate = mk.rate, minSize = mk.minSize;
-  if (!(maxSize >= minSize)) return null;
+function optimalQuote(mk, C, sigMinC, mid, budget, model, floor = 0, opts = {}) {
+  const v = mk.v, rate = mk.rate, minSize = mk.minSize, maxShares = opts.maxShares || 1e9;
   const jumpPerMin = model.jumpsPerDay / 1440;
   const jumpC = model.jumpL * 1.6 * 100 * mid * (1 - mid);
-  const sizes = [];
-  for (let x = Math.max(minSize, 5); x <= maxSize * 1.0001; x *= 1.25) sizes.push(x);
-  if (!sizes.length || sizes[sizes.length - 1] < maxSize) sizes.push(maxSize);
+  const inner = mid >= 0.1 && mid <= 0.9 && opts.allowOneSided !== false;
   let best = null, bestV = 0;
   for (let d = 0.5; d < v; d += 0.25) {
     const sd = S(v, d);
@@ -31,13 +32,26 @@ function optimalQuote(mk, C, sigMinC, mid, maxSize, model, floor = 0) {
     // taker-flow markout is only ever a cost here: spread capture is uncalibrated, so the paper book
     // never takes credit for it (edge must come from rewards)
     const flow = Math.max(0, (model.noise || 0) * Math.exp(-(model.kappa || 0.8) * d) * 0.35 * ((model.markout || 0) + (model.toxSlope ?? 0.7) * d - d) / 100);
-    for (const x of sizes) {
-      const rew = rate / 1440 * (sd * x / (sd * x + Math.max(C, 1)));
-      const qs = x / (x + Math.max(C, 1) / 0.35);
-      const cost = 2 * x * cross + 2 * qs * x * flow;
-      const rewDay = rew * 1440;
-      const val = (rewDay >= floor ? rew : 0) - cost;
-      if (val > bestV) { bestV = val; best = { d, x, edge: val, rewDay, costDay: cost * 1440 }; }
+    const modes = [{ mode: 'two', perShare: Math.max(1 - 2 * d / 100, 0.5), sides: 2, div: 1 }];
+    if (inner) {
+      modes.push({ mode: 'yes', perShare: Math.max(mid - d / 100, 0.01), sides: 1, div: 3 });
+      modes.push({ mode: 'no', perShare: Math.max(1 - mid - d / 100, 0.01), sides: 1, div: 3 });
+    }
+    for (const md of modes) {
+      const xMax = Math.min(maxShares, budget / md.perShare);
+      if (!(xMax >= minSize)) continue;
+      const sizes = [];
+      for (let x = Math.max(minSize, 5); x <= xMax * 1.0001; x *= 1.25) sizes.push(x);
+      if (sizes[sizes.length - 1] < xMax) sizes.push(xMax);
+      for (const x of sizes) {
+        const y = sd * x / md.div;
+        const rew = rate / 1440 * (y / (y + Math.max(C, 1)));
+        const qs = x / (x + Math.max(C, 1) / 0.35);
+        const cost = md.sides * (x * cross + qs * x * flow);
+        const rewDay = rew * 1440;
+        const val = (rewDay >= floor ? rew : 0) - cost;
+        if (val > bestV) { bestV = val; best = { d, x, mode: md.mode, edge: val, rewDay, costDay: cost * 1440, capUsed: x * md.perShare }; }
+      }
     }
   }
   return best;
@@ -58,8 +72,7 @@ function locked(ms) { const mid = ms.lastMid ?? ms.meta.mid; return ms.inv > 0 ?
 /** USDC collateral of the resting quote: BUY YES @ bid needs bid·size; BUY NO @ (1−ask) needs (1−ask)·size (sells of held YES need none). */
 function collateral(ms) {
   const q = ms.quote; if (!q) return 0;
-  const sellFromInv = Math.min(q.as, Math.max(ms.inv, 0));
-  return q.bid * q.bs + (1 - q.ask) * (q.as - sellFromInv);
+  return q.bid * Math.max(0, q.bs - Math.max(-ms.inv, 0)) + (1 - q.ask) * Math.max(0, q.as - Math.max(ms.inv, 0));
 }
 
 /** One tick for one market. `book` is the raw CLOB book. Returns event strings. */
@@ -127,21 +140,22 @@ function step(ms, book, now, P) {
   // 5) capital: this market's budget minus USDC already tied up in inventory
   const budget = ms.budget || P.maxSize;
   const free = Math.max(0, budget - locked(ms));
-  const maxX = Math.min(P.maxSize, free / Math.max(1 - 2 * (mk.tick || 0.01), 0.5)); // two-sided cost ≈ (bid + 1 − ask)·x
   const invCap = Math.max(mk.minSize, P.invCapFrac * budget / Math.max(Math.min(mid, 1 - mid), 0.05));
+  const longYes = Math.max(ms.inv, 0), longNo = Math.max(-ms.inv, 0); // held shares can be SOLD with no new collateral
 
-  // 6) quote
-  // the $1 payout floor applies to the account's daily total (settled by the engine), not per market
-  const best = optimalQuote(mk, comp.C, ms.sigS * 1.25, mid, maxX, ms.model, P.marketFloor ?? 0);
+  // 6) quote — the $1 payout floor is account-level (settled by the engine), so no per-market floor here
+  const best = optimalQuote(mk, comp.C, ms.sigS * 1.25, mid, free, ms.model, P.marketFloor ?? 0, { maxShares: P.maxSize, allowOneSided: P.oneSided !== false });
   const z = Math.max(-1, Math.min(1, ms.inv / invCap));
   if (!best && Math.abs(ms.inv) < mk.minSize) {
-    const why = maxX < mk.minSize ? `NO CAPITAL — $${free.toFixed(2)} free < min size ${mk.minSize}` : `STANDBY — no positive edge (C=${Math.round(comp.C).toLocaleString()})`;
-    const st = maxX < mk.minSize ? 'NO CAPITAL' : 'STANDBY';
+    const cheap = mk.minSize * Math.max(Math.min(mid, 1 - mid), 0.01);
+    const st = free < cheap ? 'NO CAPITAL' : 'STANDBY';
+    const why = st === 'NO CAPITAL' ? `NO CAPITAL — $${free.toFixed(2)} free < $${cheap.toFixed(2)} for min size ${mk.minSize}` : `STANDBY — no positive edge (C=${Math.round(comp.C).toLocaleString()})`;
     if (ms.status !== st) ev.push(why);
     ms.status = st; ms.quote = null; ms.edge = 0; return ev;
   }
+  const mode = best ? best.mode : 'unwind';
   const d = best ? best.d : mk.v * 0.6;
-  const x = best ? best.x : Math.max(mk.minSize, Math.abs(ms.inv)); // unwind: work the inventory out
+  const x = best ? best.x : Math.max(mk.minSize, Math.abs(ms.inv));
   const tick = +(book.tick_size || mk.tick || 0.01);
   const centre = mid - P.gamma * z * (mk.v / 2) / 100;
   let bid = Math.floor((centre - d / 100) / tick + 1e-9) * tick;
@@ -149,23 +163,33 @@ function step(ms, book, now, P) {
   if (comp.bestAsk != null && bid >= comp.bestAsk) bid = comp.bestAsk - tick; // post-only: never cross
   if (comp.bestBid != null && ask <= comp.bestBid) ask = comp.bestBid + tick;
   bid = Math.max(tick, Math.min(bid, 1 - tick)); ask = Math.max(tick, Math.min(ask, 1 - tick));
-  let bs = x * Math.max(0, 1 - Math.max(z, 0)), as = x * Math.max(0, 1 + Math.min(z, 0));
-  bs = bs < mk.minSize && z > 0.95 ? 0 : Math.max(bs, mk.minSize);
-  as = as < mk.minSize && z < -0.95 ? 0 : Math.max(as, mk.minSize);
-  if (!best) { if (ms.inv > 0) { bs = 0; as = Math.max(mk.minSize, ms.inv); } else { as = 0; bs = Math.max(mk.minSize, -ms.inv); } }
-  // hard capital check: shrink the collateralised legs until the quote fits the free budget
-  const need = bid * bs + (1 - ask) * Math.max(0, as - Math.max(ms.inv, 0));
-  if (need > free + 1e-9 && need > 0) {
-    const k = free / need;
-    if (bs * k >= mk.minSize || bs === 0) bs *= (bs ? k : 1); else bs = 0;
-    const asColl = Math.max(0, as - Math.max(ms.inv, 0));
-    if (asColl > 0) { const a2 = Math.max(ms.inv, 0) + asColl * k; as = a2 >= mk.minSize ? a2 : (ms.inv >= mk.minSize ? ms.inv : 0); }
+  const ok = n => (n >= mk.minSize ? n : 0);
+  let bs = 0, as = 0;
+  if (mode === 'two') {
+    bs = x * Math.max(0, 1 - Math.max(z, 0)); as = x * Math.max(0, 1 + Math.min(z, 0));
+    bs = bs < mk.minSize && z > 0.95 ? 0 : Math.max(bs, mk.minSize);
+    as = as < mk.minSize && z < -0.95 ? 0 : Math.max(as, mk.minSize);
+  } else if (mode === 'yes') {           // BUY YES only; offer held YES back for free (adds the other side's score)
+    bs = ok(x * Math.max(0, 1 - Math.max(z, 0))) || (z <= 0.95 ? mk.minSize : 0); as = ok(Math.min(longYes, x));
+  } else if (mode === 'no') {            // BUY NO only; offer held NO back (= BUY YES funded by NO shares)
+    as = ok(x * Math.max(0, 1 + Math.min(z, 0))) || (z >= -0.95 ? mk.minSize : 0); bs = ok(Math.min(longNo, x));
+  } else {                               // unwind only
+    if (ms.inv > 0) as = Math.max(mk.minSize, ms.inv); else bs = Math.max(mk.minSize, -ms.inv);
+  }
+  // hard capital check: only legs not covered by held shares need USDC; shrink them to fit the free budget
+  let collB = Math.max(0, bs - longNo), collA = Math.max(0, as - longYes);
+  const need = bid * collB + (1 - ask) * collA;
+  if (need > free + 1e-9) {
+    const k = need > 0 ? free / need : 0;
+    collB *= k; collA *= k;
+    bs = ok(Math.min(bs, longNo) + collB); as = ok(Math.min(as, longYes) + collA);
     if (bs === 0 && as === 0) { ms.status = 'NO CAPITAL'; ms.quote = null; return ev; }
   }
   bs = Math.floor(bs); as = Math.floor(as);
-  const nq = { bid: +bid.toFixed(4), ask: +ask.toFixed(4), bs, as };
+  const nq = { bid: +bid.toFixed(4), ask: +ask.toFixed(4), bs, as, mode };
+  const used = nq.bid * Math.max(0, bs - longNo) + (1 - nq.ask) * Math.max(0, as - longYes);
   if (!q || q.bid !== nq.bid || q.ask !== nq.ask || Math.abs(q.bs - bs) > 1e-6 || Math.abs(q.as - as) > 1e-6)
-    ev.push(`${q ? 'REQUOTE' : 'POST'} bid ${nq.bid.toFixed(2)}×${bs} / ask ${nq.ask.toFixed(2)}×${as} · mid ${(mid * 100).toFixed(1)}¢ · d ${d.toFixed(2)}¢ · uses $${(nq.bid * bs + (1 - nq.ask) * Math.max(0, as - Math.max(ms.inv, 0))).toFixed(2)} of $${free.toFixed(2)} free`);
+    ev.push(`${q ? 'REQUOTE' : 'POST'} ${mode.toUpperCase()} bid ${nq.bid.toFixed(3)}×${bs} / ask ${nq.ask.toFixed(3)}×${as} · mid ${(mid * 100).toFixed(1)}¢ · d ${d.toFixed(2)}¢ · uses $${used.toFixed(2)} of $${free.toFixed(2)} free`);
   ms.quote = nq; ms.status = best ? 'QUOTING' : 'UNWIND'; ms.edge = best ? best.edge * 1440 : 0;
   return ev;
 }
@@ -177,17 +201,21 @@ function mtm(ms) { const mid = ms.lastMid ?? ms.meta.mid; return ms.cash + ms.in
  * net $/day (reward above the payout floor − crossing/markout cost) from it. First dollars into a
  * market must cover its min size. Returns [{i, budget, best}] for markets that got capital.
  */
-function allocateCapital(cands, capital, floor, maxMarkets, chunk = 5, maxPer = Infinity) {
+function allocateCapital(cands, capital, floor, maxMarkets, chunk = 5, maxPer = Infinity, seed = null) {
   // cands: [{mk, C, sig, mid, model}]
-  const val = (c, b) => { const q = optimalQuote(c.mk, c.C, c.sig * 1.25, c.mid, b / Math.max(1 - 2 * (c.mk.tick || 0.01), 0.5), c.model, floor); return q ? q.edge * 1440 : 0; };
-  const budget = cands.map(() => 0), cur = cands.map(() => 0);
-  let left = capital;
+  const val = (c, b) => { const q = optimalQuote(c.mk, c.C, c.sig * 1.25, c.mid, b, c.model, floor, c.opts); return q ? q.edge * 1440 : 0; };
+  // cheapest way into a market: one-sided on the cheap side when allowed, else a two-sided pair
+  const entry = c => c.mk.minSize * (c.mid >= 0.1 && c.mid <= 0.9 && !(c.opts && c.opts.allowOneSided === false) ? Math.max(Math.min(c.mid, 1 - c.mid) - 0.005, 0.01) : 0.98);
+  // `seed` pre-funds markets (e.g. one market at its two-sided threshold) before the greedy fills the rest —
+  // the value curve jumps at mode thresholds, which pure $5-step greedy can't see
+  const budget = cands.map((c, i) => (seed && seed[i]) || 0), cur = cands.map((c, i) => budget[i] ? val(c, budget[i]) : 0);
+  let left = capital - budget.reduce((a, b) => a + b, 0);
   for (let guard = 0; guard < 2000 && left >= chunk; guard++) {
     let bi = -1, bg = 0, bc = 0;
     const funded = budget.filter(b => b > 0).length;
     cands.forEach((c, i) => {
       if (budget[i] === 0 && funded >= maxMarkets) return;
-      const step = budget[i] === 0 ? Math.max(chunk, Math.ceil(c.mk.minSize * (1 - 2 * (c.mk.tick || 0.01)) / chunk) * chunk) : chunk;
+      const step = budget[i] === 0 ? Math.max(chunk, Math.ceil(entry(c) / chunk) * chunk) : chunk;
       if (step > left || budget[i] + step > maxPer) return; // per-market cap forces diversification
       const g = (val(c, budget[i] + step) - cur[i]) / step;
       if (g > bg) { bg = g; bi = i; bc = step; }
@@ -195,8 +223,8 @@ function allocateCapital(cands, capital, floor, maxMarkets, chunk = 5, maxPer = 
     if (bi < 0) break;
     budget[bi] += bc; left -= bc; cur[bi] = val(cands[bi], budget[bi]);
   }
-  const rewAt = (c, b) => { const q = optimalQuote(c.mk, c.C, c.sig * 1.25, c.mid, b / Math.max(1 - 2 * (c.mk.tick || 0.01), 0.5), c.model, floor); return q ? q.rewDay : 0; };
-  return cands.map((c, i) => ({ i, budget: budget[i], edgeDay: cur[i], rewDay: budget[i] ? rewAt(c, budget[i]) : 0 })).filter(r => r.budget > 0);
+  const qAt = (c, b) => optimalQuote(c.mk, c.C, c.sig * 1.25, c.mid, b, c.model, floor, c.opts);
+  return cands.map((c, i) => { const q = budget[i] ? qAt(c, budget[i]) : null; return { i, budget: budget[i], edgeDay: cur[i], rewDay: q ? q.rewDay : 0, mode: q ? q.mode : null }; }).filter(r => r.budget > 0);
 }
 
 const PaperCore = { optimalQuote, step, newMarketState, mtm, locked, collateral, allocateCapital, utcDay, DEFAULTS };

@@ -58,7 +58,7 @@ function optimalQuote(mk, C, sigMinC, mid, budget, model, floor = 0, opts = {}) 
 }
 
 const DEFAULTS = { tickSec: 60, capital: 200, payoutFloor: 1, marketFloor: 0, maxSize: 1000, invCapFrac: 0.6, gamma: 0.9, gate: 2.6,
-  cooldownMin: 20, eventGuardH: 12, maxMarkets: 6, maxPerMarketFrac: 0.75, rebalanceH: 6 };
+  cooldownMin: 20, eventGuardH: 12, maxMarkets: 12, maxPerMarketFrac: 0.75, rebalanceH: 6 };
 
 function newMarketState(meta, model, now, budget = 0) {
   const sigSeed = model.volL / Math.sqrt(1440) * 100 * meta.mid * (1 - meta.mid) * 0.8; // calibrated |Δp| per minute, cents

@@ -1,8 +1,8 @@
 {
   "capital": 200,
   "running": true,
-  "resetId": 2,
-  "maxMarkets": 6,
+  "resetId": 3,
+  "maxMarkets": 12,
   "maxPerMarketFrac": 0.75,
   "eventGuardH": 12,
   "rebalanceH": 6,

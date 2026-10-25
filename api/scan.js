@@ -60,13 +60,15 @@ async function fetchBooks(tokenIds) {
 module.exports = async (req, res) => {
   const t0 = Date.now();
   try {
-    const n = Math.min(Math.max(parseInt(req.query.n || '60', 10) || 60, 5), 120);
+    // deep=1 scans every reward market (small pools are where competing liquidity is thinnest)
+    const deep = req.query.deep === '1';
+    const n = Math.min(Math.max(parseInt(req.query.n || '60', 10) || 60, 5), deep ? 3000 : 120);
     const size = Math.min(Math.max(+req.query.size || 1000, 10), 1e6);
     const q = (req.query.q || '').toString().slice(0, 80);
     const tag = (req.query.tag || '').toString().slice(0, 40);
     const today = new Date().toISOString().slice(0, 10);
 
-    const raw = await fetchRewardMarkets({ q, tag, pages: 2 });
+    const raw = await fetchRewardMarkets({ q, tag, pages: deep ? 12 : 2 });
     const live = raw
       .map(m => ({ m, ...activeRate(m.rewards_config, today) }))
       .filter(x => x.rate > 0 && x.m.tokens && x.m.tokens.length >= 2)

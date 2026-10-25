@@ -43,8 +43,8 @@ function optimalQuote(mk, C, sigMinC, mid, maxSize, model, floor = 0) {
   return best;
 }
 
-const DEFAULTS = { tickSec: 60, capital: 200, payoutFloor: 1, maxSize: 1000, invCapFrac: 0.6, gamma: 0.9, gate: 2.6,
-  cooldownMin: 20, eventGuardH: 12, maxMarkets: 4, rebalanceH: 6 };
+const DEFAULTS = { tickSec: 60, capital: 200, payoutFloor: 1, marketFloor: 0, maxSize: 1000, invCapFrac: 0.6, gamma: 0.9, gate: 2.6,
+  cooldownMin: 20, eventGuardH: 12, maxMarkets: 6, maxPerMarketFrac: 0.75, rebalanceH: 6 };
 
 function newMarketState(meta, model, now, budget = 0) {
   const sigSeed = model.volL / Math.sqrt(1440) * 100 * meta.mid * (1 - meta.mid) * 0.8; // calibrated |Δp| per minute, cents
@@ -131,10 +131,11 @@ function step(ms, book, now, P) {
   const invCap = Math.max(mk.minSize, P.invCapFrac * budget / Math.max(Math.min(mid, 1 - mid), 0.05));
 
   // 6) quote
-  const best = optimalQuote(mk, comp.C, ms.sigS * 1.25, mid, maxX, ms.model, P.payoutFloor);
+  // the $1 payout floor applies to the account's daily total (settled by the engine), not per market
+  const best = optimalQuote(mk, comp.C, ms.sigS * 1.25, mid, maxX, ms.model, P.marketFloor ?? 0);
   const z = Math.max(-1, Math.min(1, ms.inv / invCap));
   if (!best && Math.abs(ms.inv) < mk.minSize) {
-    const why = maxX < mk.minSize ? `NO CAPITAL — $${free.toFixed(2)} free < min size ${mk.minSize}` : `STANDBY — no positive edge above the $${P.payoutFloor}/day floor (C=${Math.round(comp.C).toLocaleString()})`;
+    const why = maxX < mk.minSize ? `NO CAPITAL — $${free.toFixed(2)} free < min size ${mk.minSize}` : `STANDBY — no positive edge (C=${Math.round(comp.C).toLocaleString()})`;
     const st = maxX < mk.minSize ? 'NO CAPITAL' : 'STANDBY';
     if (ms.status !== st) ev.push(why);
     ms.status = st; ms.quote = null; ms.edge = 0; return ev;
@@ -176,7 +177,7 @@ function mtm(ms) { const mid = ms.lastMid ?? ms.meta.mid; return ms.cash + ms.in
  * net $/day (reward above the payout floor − crossing/markout cost) from it. First dollars into a
  * market must cover its min size. Returns [{i, budget, best}] for markets that got capital.
  */
-function allocateCapital(cands, capital, floor, maxMarkets, chunk = 5) {
+function allocateCapital(cands, capital, floor, maxMarkets, chunk = 5, maxPer = Infinity) {
   // cands: [{mk, C, sig, mid, model}]
   const val = (c, b) => { const q = optimalQuote(c.mk, c.C, c.sig * 1.25, c.mid, b / Math.max(1 - 2 * (c.mk.tick || 0.01), 0.5), c.model, floor); return q ? q.edge * 1440 : 0; };
   const budget = cands.map(() => 0), cur = cands.map(() => 0);
@@ -187,14 +188,15 @@ function allocateCapital(cands, capital, floor, maxMarkets, chunk = 5) {
     cands.forEach((c, i) => {
       if (budget[i] === 0 && funded >= maxMarkets) return;
       const step = budget[i] === 0 ? Math.max(chunk, Math.ceil(c.mk.minSize * (1 - 2 * (c.mk.tick || 0.01)) / chunk) * chunk) : chunk;
-      if (step > left) return;
+      if (step > left || budget[i] + step > maxPer) return; // per-market cap forces diversification
       const g = (val(c, budget[i] + step) - cur[i]) / step;
       if (g > bg) { bg = g; bi = i; bc = step; }
     });
     if (bi < 0) break;
     budget[bi] += bc; left -= bc; cur[bi] = val(cands[bi], budget[bi]);
   }
-  return cands.map((c, i) => ({ i, budget: budget[i], edgeDay: cur[i] })).filter(r => r.budget > 0);
+  const rewAt = (c, b) => { const q = optimalQuote(c.mk, c.C, c.sig * 1.25, c.mid, b / Math.max(1 - 2 * (c.mk.tick || 0.01), 0.5), c.model, floor); return q ? q.rewDay : 0; };
+  return cands.map((c, i) => ({ i, budget: budget[i], edgeDay: cur[i], rewDay: budget[i] ? rewAt(c, budget[i]) : 0 })).filter(r => r.budget > 0);
 }
 
 const PaperCore = { optimalQuote, step, newMarketState, mtm, locked, collateral, allocateCapital, utcDay, DEFAULTS };

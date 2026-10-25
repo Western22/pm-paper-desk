@@ -40,7 +40,7 @@ function loadState(cfg) {
 }
 
 function applyConfig(s, cfg) {
-  for (const k of ['maxSize', 'eventGuardH', 'maxMarkets', 'gamma', 'gate', 'cooldownMin', 'rebalanceH', 'payoutFloor']) if (cfg[k] != null && isFinite(+cfg[k])) s.P[k] = +cfg[k];
+  for (const k of ['maxSize', 'eventGuardH', 'maxMarkets', 'maxPerMarketFrac', 'gamma', 'gate', 'cooldownMin', 'rebalanceH', 'payoutFloor']) if (cfg[k] != null && isFinite(+cfg[k])) s.P[k] = +cfg[k];
   if (process.env.TICK_SEC) s.P.tickSec = +process.env.TICK_SEC; // tests only
   const want = cfg.running !== false;
   if (want && !s.running) { s.running = true; s.startedAt = s.startedAt || Date.now(); s.lastTick = 0; for (const ms of Object.values(s.markets)) ms.lastT = Date.now();

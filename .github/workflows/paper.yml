@@ -1,0 +1,41 @@
+name: paper-trader
+
+# Runs the $-bankroll paper engine 24/7. Each job lives ~5h45m; the hourly schedule keeps one run
+# queued behind it (concurrency group), so the next run resumes from the saved ledger within seconds.
+on:
+  schedule:
+    - cron: '7 * * * *'
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths: ['paper-config.json']
+
+concurrency:
+  group: paper-trader
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check out ledger branch into ./state
+        run: |
+          git config --global user.name "paper-bot"
+          git config --global user.email "paper-bot@users.noreply.github.com"
+          if git fetch -q --depth=1 origin paper-state; then
+            git worktree add -q -B paper-state state FETCH_HEAD
+          else
+            git worktree add -q --orphan -b paper-state state
+          fi
+      - name: Run paper engine
+        run: node runner/run.js

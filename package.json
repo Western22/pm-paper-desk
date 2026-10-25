@@ -1,0 +1,7 @@
+{
+  "name": "pm-paper-desk",
+  "private": true,
+  "description": "24/7 Polymarket liquidity-rewards paper trader (GitHub Actions)",
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "node runner/run.js" }
+}

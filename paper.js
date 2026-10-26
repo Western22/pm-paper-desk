@@ -111,7 +111,7 @@ function step(ms, book, now, P) {
     const r = mk.rate / 1440 * share * dtMin;
     ms.reward += r; ms.dayReward += r;
     ms.lastShare = share;
-    if (bs > 0 && as > 0) ms.quotedMs += dtMin * 60000;
+    if (bs > 0 || as > 0) ms.quotedMs += dtMin * 60000; // one-sided quotes earn (⅓ score) too
   }
 
   // 3) volatility EWMA (per tick → per minute)
@@ -120,7 +120,8 @@ function step(ms, book, now, P) {
   if (ms.lastMid != null) {
     const d = Math.abs(mid - ms.lastMid) * 100 * perMin;
     const aF = 1 - Math.exp(-Math.LN2 * (P.tickSec / 60) / 5), aS = 1 - Math.exp(-Math.LN2 * (P.tickSec / 60) / 240);
-    shock = d > 4 * Math.max(ms.sigS, 0.02) && Math.abs(mid - ms.lastMid) * 100 >= 1;
+    // a jump only matters if it's large vs the reward band; thin books tick by ½–1¢ without information
+    shock = d > 4 * Math.max(ms.sigS, 0.02) && Math.abs(mid - ms.lastMid) * 100 >= Math.max(1.5, 0.4 * mk.v);
     ms.sigF += aF * (d - ms.sigF); ms.sigS += aS * (d - ms.sigS);
   }
   ms.lastMid = mid;
@@ -131,7 +132,8 @@ function step(ms, book, now, P) {
     if (ms.status !== 'EVENT GUARD') ev.push(`EVENT GUARD — resolves in ${hoursLeft.toFixed(1)} h, quotes pulled`);
     ms.status = 'EVENT GUARD'; ms.quote = null; return ev;
   }
-  if (shock || ms.sigF > P.gate * Math.max(ms.sigS, 0.005)) {
+  // absolute floor: below ~0.3¢/min a 60 s requote keeps up, so a calm-vs-calmer ratio is no reason to pull
+  if (shock || ms.sigF > Math.max(P.gate * ms.sigS, P.gateFloor ?? 0.3)) {
     if (ms.cool <= 0) ev.push(`GATE — fast vol ${ms.sigF.toFixed(3)}¢/min vs slow ${ms.sigS.toFixed(3)}¢/min, pulling for ${P.cooldownMin} min`);
     ms.cool = Math.ceil(P.cooldownMin * 60 / P.tickSec);
   }

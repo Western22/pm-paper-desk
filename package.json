@@ -1,7 +1,16 @@
 {
-  "name": "pm-paper-desk",
+  "name": "pm-liquidity-desk",
   "private": true,
-  "description": "24/7 Polymarket liquidity-rewards paper trader (GitHub Actions)",
-  "engines": { "node": ">=20" },
-  "scripts": { "start": "node runner/run.js" }
+  "version": "1.1.0",
+  "description": "Polymarket liquidity-rewards desk (Vercel UI + API) and 24/7 paper trader (GitHub Actions)",
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "@vercel/blob": "latest"
+  },
+  "scripts": {
+    "test": "node test/engine.test.js && node test/api.test.js && node test/paper.test.js && NODE_PATH=test/fakemods node test/paper_api.test.js",
+    "start": "node runner/run.js"
+  }
 }

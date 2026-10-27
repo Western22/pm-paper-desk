@@ -1,0 +1,7 @@
+{
+  "functions": { "api/scan.js": { "maxDuration": 30 }, "api/paper.js": { "maxDuration": 60 } },
+  "headers": [
+    { "source": "/(.*)\\.(js|css)", "headers": [{ "key": "cache-control", "value": "public, max-age=60" }] },
+    { "source": "/bot/(.*)", "headers": [{ "key": "content-type", "value": "text/plain; charset=utf-8" }] }
+  ]
+}

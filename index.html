@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Liquidity Desk · Polymarket Rewards</title>
+<meta name="description" content="Quant desk for Polymarket liquidity-reward market making: live reward scanner, safest-market screen, scoring calculator, Monte Carlo strategy lab, capital allocator, live paper trading and execution bot.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2305070d'/%3E%3Cpath d='M6 22 L12 14 L17 18 L26 8' stroke='%233dffa8' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div class="wrap">
+  <header>
+    <div class="brand"><div class="logo"><i>LD</i></div><div><h1>LIQUIDITY DESK</h1><small>Polymarket · reward market making</small></div></div>
+    <div class="hstat">
+      <span class="pill" id="feed"><span class="dot" id="feedDot"></span><span id="feedTxt">connecting…</span></span>
+      <span class="pill">UTC <b class="mono" id="clock">--:--:--</b></span>
+      <span class="pill">epoch payout in <b class="mono" id="epoch">--:--:--</b></span>
+      <span class="pill">sample <b class="mono" id="sample">#----</b>/1440</span>
+    </div>
+  </header>
+  <div class="ticker"><div class="track" id="ticker"></div></div>
+
+  <nav class="tabs" id="tabs">
+    <button data-v="scan" class="on"><span class="n">01</span>Scanner</button>
+    <button data-v="score"><span class="n">02</span>Scoring</button>
+    <button data-v="lab"><span class="n">03</span>Strategy Lab</button>
+    <button data-v="alloc"><span class="n">04</span>Allocator</button>
+    <button data-v="paper"><span class="n">05</span>Paper Live</button>
+    <button data-v="exec"><span class="n">06</span>Execution</button>
+  </nav>
+
+  <!-- 01 SCANNER -->
+  <section class="view on" id="v-scan">
+    <div class="grid g-kpi" style="margin-bottom:14px">
+      <div class="panel kpi"><label>Reward pool / day</label><div class="v pos" id="k-pool">—</div><div class="s" id="k-pool-s">live incentivised markets</div></div>
+      <div class="panel kpi"><label>Markets ranked</label><div class="v" id="k-n">—</div><div class="s" id="k-n-s">books priced</div></div>
+      <div class="panel kpi"><label>Median ref APR</label><div class="v" id="k-apr">—</div><div class="s" id="k-apr-s">at ref size, 1¢ from mid</div></div>
+      <div class="panel kpi"><label>Best edge score</label><div class="v pos" id="k-best">—</div><div class="s" id="k-best-s">—</div></div>
+      <div class="panel kpi"><label>Uncontested pools</label><div class="v warn" id="k-thin">—</div><div class="s">C &lt; 500 score units</div></div>
+    </div>
+    <div class="grid g-scan">
+      <div class="panel">
+        <div class="ph"><h3>Reward markets · ranked</h3><span class="sp"></span>
+          <input id="q" placeholder="search…" style="width:130px">
+          <label class="dim" style="font-size:11px">ref size</label><input id="refSize" type="number" value="1000" style="width:82px">
+          <button class="btn" id="rescan">↻ Rescan</button></div>
+        <div class="scroll"><table class="tbl" id="tbl"><thead><tr>
+          <th data-k="question">Market</th><th data-k="rate">$/day</th><th data-k="mid" class="hm">Mid</th><th data-k="v" class="hm">Band</th>
+          <th data-k="C">Comp.</th><th data-k="refShare" class="hm">Share</th><th data-k="refAPR">Ref APR</th><th data-k="score">Edge</th></tr></thead><tbody></tbody></table></div>
+      </div>
+      <div class="panel" id="detail"><div class="empty">Select a market to open its book</div></div>
+    </div>
+  </section>
+
+  <!-- 02 SCORING -->
+  <section class="view" id="v-score">
+    <div class="grid g-2">
+      <div class="panel"><div class="ph"><h3>Order score S(v,s) = ((v−s)/v)² · b</h3></div>
+        <div class="pb"><canvas class="ch" id="cS" height="280"></canvas>
+          <div class="grid g-2" style="margin-top:12px">
+            <div><div class="sl"><div class="top">max spread v <b id="o-v"></b></div><input type="range" id="s-v" min="1" max="6" step="0.5" value="3.5"></div>
+                 <div class="sl"><div class="top">your distance s <b id="o-d"></b></div><input type="range" id="s-d" min="0" max="6" step="0.1" value="1"></div>
+                 <div class="sl"><div class="top">size / side (shares) <b id="o-x"></b></div><input type="range" id="s-x" min="10" max="20000" step="10" value="1000"></div></div>
+            <div><div class="sl"><div class="top">pool $/day <b id="o-r"></b></div><input type="range" id="s-r" min="5" max="2000" step="5" value="150"></div>
+                 <div class="sl"><div class="top">competing score C <b id="o-c"></b></div><input type="range" id="s-c" min="0" max="40000" step="50" value="2500"></div>
+                 <div class="sl"><div class="top">mid <b id="o-m"></b></div><input type="range" id="s-m" min="0.02" max="0.98" step="0.01" value="0.5"></div></div>
+          </div></div></div>
+      <div class="panel"><div class="ph"><h3>Your take</h3></div>
+        <div class="pb">
+          <div class="stats" id="scoreStats"></div>
+          <canvas class="ch" id="cShare" height="210"></canvas>
+          <div class="legend" style="margin-top:8px"><span><i style="background:var(--mint)"></i>$ / day vs size (concave)</span><span><i style="background:var(--amber)"></i>marginal $ per extra 1k shares</span></div>
+          <p class="note">Two-sided rule: Q<sub>min</sub> = max(min(Q₁,Q₂), max(Q₁,Q₂)/3) when mid ∈ [0.10, 0.90]; outside that range only min(Q₁,Q₂) counts — one-sided quotes earn nothing. Score is sampled every minute at a random offset (1,440 samples per UTC-day epoch); payouts below $1 are not paid.</p>
+        </div></div>
+    </div>
+  </section>
+
+  <!-- 03 LAB -->
+  <section class="view" id="v-lab">
+    <div class="grid g-lab">
+      <div class="panel"><div class="ph"><h3>Regime & params</h3></div>
+        <div class="pb">
+          <div class="row" style="margin-bottom:10px"><select id="preset" style="flex:1"></select></div>
+          <div class="dim" id="calibNote" style="font-size:11.5px;margin-bottom:10px"></div>
+          <fieldset><legend>Market</legend><div id="envFields"></div></fieldset>
+          <fieldset><legend>Strategy</legend><div id="parFields"></div></fieldset>
+          <fieldset><legend>Simulation</legend>
+            <div class="field">days<input id="days" type="number" value="7" min="1" max="30"></div>
+            <div class="field">CRN paths<input id="paths" type="number" value="12" min="2" max="60"></div>
+            <div class="field">seed<input id="seed" type="number" value="7"></div></fieldset>
+          <div class="row"><button class="btn pri" id="run">▶ Run backtest</button><button class="btn" id="sweepBtn">⊞ Sweep v4</button></div>
+          <div class="progress"><i id="prog"></i></div>
+        </div></div>
+      <div class="grid">
+        <div class="panel"><div class="ph"><h3>Equity race · mean of CRN paths</h3><span class="sp"></span><div class="legend" id="eqLegend"></div></div>
+          <div class="pb"><canvas class="ch" id="cEq" height="300"></canvas></div></div>
+        <div class="panel"><div class="ph"><h3>Scorecard</h3><span class="sp"></span><span class="dim mono" style="font-size:11px" id="labMeta"></span></div>
+          <div class="scroll" style="max-height:none"><table class="tbl res" id="resTbl"><thead><tr><th>Strategy</th><th>Net $/day</th><th>Rewards</th><th>Trading P&amp;L</th><th>Sharpe</th><th>Max DD</th><th>Win days</th><th>Uptime</th><th>Avg share</th><th>APR</th></tr></thead><tbody></tbody></table></div></div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:14px"><div class="ph"><h3>Iteration journal · each version vs its parent</h3></div><div class="pb"><div class="journal" id="journal"></div></div></div>
+    <div class="grid g-2" style="margin-top:14px">
+      <div class="panel"><div class="ph"><h3>Parameter sweep · v4 annualised Sharpe</h3><span class="sp"></span>
+        <select id="sweepAxes"><option value="gamma|gate">γ skew × vol gate</option><option value="size|gamma">size × γ skew</option><option value="gate|cooldown">vol gate × cooldown</option></select></div>
+        <div class="pb"><div class="heat" id="heat"><div class="empty">Run a sweep to map the parameter surface. Click any cell to promote those params.</div></div></div></div>
+      <div class="panel"><div class="ph"><h3>Daily P&amp;L distribution</h3></div><div class="pb"><canvas class="ch" id="cHist" height="260"></canvas></div></div>
+    </div>
+  </section>
+
+  <!-- 04 ALLOCATOR -->
+  <section class="view" id="v-alloc">
+    <div class="grid g-lab">
+      <div class="panel"><div class="ph"><h3>Book budget</h3></div><div class="pb">
+        <div class="field">capital (USDC)<input id="cap" type="number" value="25000"></div>
+        <div class="field">markets considered<input id="topN" type="number" value="25"></div>
+        <div class="field">adverse cost bps/day<input id="adv" type="number" value="15"></div>
+        <div class="field">quote distance ¢<input id="adist" type="number" value="1" step="0.25"></div>
+        <button class="btn pri" id="allocBtn">◆ Water-fill</button>
+        <p class="note">Each pool pays R·y/(y+C) for your score y — concave, so the first dollar into a thin pool beats the next dollar into a deep one. KKT gives x* = (√(sRC/(λ+a)) − C)/s per market; we bisect λ until the book is fully deployed, and drop markets whose x* falls below the pool's min size.</p>
+        <div class="stats" id="allocStats" style="grid-template-columns:1fr 1fr"></div>
+        <button class="btn" id="dlCfg">⤓ Export bot config</button>
+      </div></div>
+      <div class="panel"><div class="ph"><h3>Optimal allocation</h3><span class="sp"></span><span class="dim mono" style="font-size:11px" id="allocMeta"></span></div>
+        <div class="pb" id="allocList"><div class="empty">Run the scanner, then water-fill.</div></div></div>
+    </div>
+  </section>
+
+  <!-- 05 PAPER LIVE -->
+  <section class="view" id="v-paper">
+    <div class="panel" style="margin-bottom:14px"><div class="ph"><h3>Live paper trading · server-side on Vercel</h3><span class="sp"></span><span class="pill stop" id="ppState">loading…</span></div>
+      <div class="pb">
+        <div class="row">
+          <button class="btn pri" id="ppStart">▶ Start paper trading</button>
+          <button class="btn" id="ppAuto">◎ Auto-pick markets</button>
+          <select id="ppMarket" style="max-width:340px"><option value="">add a market…</option></select><button class="btn" id="ppAdd">＋ Add</button>
+          <label class="dim" style="font-size:11px">size / side</label><input id="ppSize" type="number" value="1000" style="width:80px">
+          <label class="dim" style="font-size:11px">event guard h</label><input id="ppGuard" type="number" value="12" style="width:60px">
+          <button class="btn" id="ppReset">↺ New account</button><button class="btn" id="ppForget">forget key</button>
+        </div>
+        <p class="note" id="ppEngine"></p>
+        <p class="note" id="ppPace"></p>
+        <p class="note"><b>Fully automated paper account.</b> A GitHub Actions runner trades 24/7, ticking every minute against real Polymarket books with a fixed paper bankroll, and saves this ledger every few minutes. Every quote must be fully collateralised from that bankroll (BUY YES at bid + BUY NO at 1 − ask ≈ $1 per share pair), filled inventory ties capital up, and markets whose min size the bankroll can't cover are skipped. A <b>fill</b> is booked only when the live book trades through the paper price; <b>rewards</b> accrue from the quadratic score vs live competition and settle at 00:00 UTC — a market's day is <b>forfeited if it earned under $1</b>, exactly like Polymarket's payout floor. Every 6 h the allocator closes idle markets and re-funds the best safe ones, recycling realised P&amp;L. Fill flow is counted only as a cost, never as profit. To pause, change the bankroll or start over, edit <span class="mono">paper-config.json</span> in the GitHub repo (<span class="mono">running</span> / <span class="mono">capital</span> / <span class="mono">resetId</span>). No keys to Polymarket, no orders.</p>
+      </div></div>
+    <div class="pk" id="ppKpi"></div>
+    <div class="grid g-2">
+      <div class="panel"><div class="ph"><h3>Paper equity · rewards (amber) + mark-to-market</h3></div><div class="pb"><canvas id="ppEq" style="width:100%;display:block" height="220"></canvas></div></div>
+      <div class="panel"><div class="ph"><h3>Event tape</h3></div><div class="pb"><div class="plog" id="ppLog"></div></div></div>
+    </div>
+    <div class="panel" style="margin-top:14px"><div class="ph"><h3>Paper book</h3></div>
+      <div class="scroll" style="max-height:none"><table class="tbl"><thead><tr><th>Market</th><th>Status</th><th>Mid</th><th>Bid / Ask</th><th>Size</th><th>Comp. C</th><th>Share</th><th>Budget</th><th>Inv</th><th>Pending</th><th>Paid</th><th>MTM P&amp;L</th><th></th></tr></thead><tbody id="ppRows"></tbody></table></div></div>
+    <div class="panel" style="margin-top:14px"><div class="ph"><h3>Daily ledger · snapshot at each UTC epoch</h3></div>
+      <div class="scroll" style="max-height:320px"><table class="tbl"><thead><tr><th>UTC day</th><th>Equity</th><th>Rewards paid</th><th>Forfeited</th><th>Trading P&amp;L</th><th>Fills</th><th>Markets</th></tr></thead><tbody id="ppHist"></tbody></table></div></div>
+  </section>
+
+  <!-- 06 EXECUTION -->
+  <section class="view" id="v-exec">
+    <div class="panel pipe" style="margin-bottom:14px"><div class="ph"><h3>Production loop</h3></div><div class="pb" id="pipe"></div></div>
+    <div class="grid g-2">
+      <div class="panel"><div class="ph"><h3>Quote engine (Python · polymarket-client)</h3><span class="sp"></span>
+          <a class="btn" href="/bot/mm_bot.py" download>⤓ mm_bot.py</a><a class="btn" href="/bot/paper_trader.py" download>⤓ paper_trader.py</a><a class="btn" href="/bot/live_test.py" download>⤓ live_test.py</a><a class="btn" href="/bot/README.md" download>⤓ README</a></div>
+        <div class="pb"><div class="code" id="botCode">loading…</div></div></div>
+      <div class="panel"><div class="ph"><h3>Risk controls & kill switches</h3></div><div class="pb">
+        <div class="check">
+          <div><span><b>Paper first.</b> Run the Paper Live tab (or <span class="mono">python paper_trader.py</span>) for at least a week; compare its reward pace with what you'd expect before risking capital.</span></div>
+          <div><span><b>Start on the safest market.</b> <span class="mono">python live_test.py</span> picks the Scanner's safest pick and dry-runs the bot against its live book — no keys.</span></div>
+          <div><span><b>Dry-run by default.</b> The bot prints intended orders until you set <span class="mono">LIVE=1</span>. Keys stay in your environment — never in this site.</span></div>
+          <div><span><b>Dead-man switch.</b> Live mode sends order heartbeats every 5 s; if the process dies, Polymarket auto-cancels resting orders ~10 s later.</span></div>
+          <div><span><b>Jump gate.</b> Cancel when a mid move exceeds 4× the slow EWMA or fast vol ≫ slow vol; cool down N minutes (v4).</span></div>
+          <div><span><b>Event guard.</b> Pull quotes N hours before resolution and ahead of scheduled jumps (kick-off, debates, data releases).</span></div>
+          <div><span><b>Inventory caps.</b> Soft cap → skew + taper; hard cap → stop adding on that side. Merge YES+NO pairs back to USDC daily.</span></div>
+          <div><span><b>Two-sided integrity.</b> Outside [0.10, 0.90] one-sided quotes score zero — never leave a lone order out there.</span></div>
+          <div><span><b>Reconcile.</b> Compare modelled share vs <span class="mono">/rewards/user/total</span> each day; a persistent gap means your C estimate or uptime is off.</span></div>
+          <div><span><b>Jurisdiction.</b> Check Polymarket's terms and restricted-region list for where you live before trading live.</span></div>
+        </div>
+        <div class="ph" style="margin:14px -14px 10px;border-top:1px solid var(--line)"><h3>Generated config</h3></div>
+        <div class="code" id="cfgCode" style="max-height:220px"></div>
+      </div></div>
+    </div>
+  </section>
+
+  <footer>
+    Scoring per Polymarket liquidity-rewards methodology (quadratic S, two-sided Q<sub>min</sub>, c = 3, per-minute sampling, UTC-day epochs). Competition C is estimated from the public book and cannot see order-level min-size filtering or other makers' uptime — treat ref APR as an upper bound. “Safest” ranks lowest adverse-selection risk per reward dollar; it is not a guarantee against loss. Paper fills are conservative (trade-through only) and paper rewards are modelled, not paid. Strategy Lab is a stylised Monte Carlo, not an L2 replay. Research tooling, not investment advice.
+  </footer>
+</div>
+<script src="/engine.js"></script>
+<script src="/safety.js"></script>
+<script src="/app.js"></script>
+<script src="/safe.js"></script>
+<script src="/paper.js"></script>
+</body>
+</html>

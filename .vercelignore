@@ -1,0 +1,9 @@
+state/
+bot/run/
+test/
+analysis/
+runner/
+.github/
+.claude/
+.harnesskit/
+*.md

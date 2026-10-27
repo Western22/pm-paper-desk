@@ -1,14 +1,25 @@
 // Shared helpers for serverless routes (files prefixed with _ are not exposed as routes).
 const CLOB = 'https://clob.polymarket.com';
 
-async function getJSON(url, init = {}, timeoutMs = 8000) {
+async function getJSONOnce(url, init, timeoutMs) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     const r = await fetch(url, { ...init, signal: ctl.signal, headers: { accept: 'application/json', 'user-agent': 'pm-liquidity-desk/1.0', ...(init.headers || {}) } });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText} ← ${url.replace(CLOB, '')}`);
+    if (!r.ok) { const e = new Error(`${r.status} ${r.statusText} ← ${url.replace(CLOB, '')}`); e.status = r.status; throw e; }
     return await r.json();
   } finally { clearTimeout(timer); }
+}
+/** GET/POST JSON with retries on rate limits (429), 5xx, timeouts and network errors: 0.3 s, 0.9 s backoff. */
+async function getJSON(url, init = {}, timeoutMs = 8000, retries = 2) {
+  for (let a = 0; ; a++) {
+    try { return await getJSONOnce(url, init, timeoutMs); }
+    catch (e) {
+      const transient = !e.status || e.status === 429 || e.status >= 500;
+      if (!transient || a >= retries) throw e;
+      await new Promise(r => setTimeout(r, 300 * 3 ** a));
+    }
+  }
 }
 
 async function pool(items, n, fn) {

@@ -57,8 +57,12 @@ async function fetchBooks(tokenIds) {
   return books;
 }
 
+// last good response per query: served (flagged stale) if Polymarket is briefly slow / rate-limiting us
+const lastGood = new Map();
+
 module.exports = async (req, res) => {
   const t0 = Date.now();
+  const cacheKey = JSON.stringify([req.query.n, req.query.size, req.query.q, req.query.tag, req.query.deep]);
   try {
     // deep=1 scans every reward market (small pools are where competing liquidity is thinnest)
     const deep = req.query.deep === '1';
@@ -112,8 +116,12 @@ module.exports = async (req, res) => {
     for (const r of rows) { const a = Safety.assess(r); r.safety = a.safety; r.safePassed = a.passed; }
     const safest = Safety.pickSafest(rows);
 
-    send(res, 200, { ok: true, asOf: new Date().toISOString(), ms: Date.now() - t0, scanned: raw.length, count: rows.length, refSize: size, safest, markets: rows });
+    const body = { ok: true, asOf: new Date().toISOString(), ms: Date.now() - t0, scanned: raw.length, count: rows.length, refSize: size, safest, markets: rows };
+    lastGood.set(cacheKey, body);
+    send(res, 200, body);
   } catch (e) {
+    const prev = lastGood.get(cacheKey);
+    if (prev && Date.now() - Date.parse(prev.asOf) < 15 * 60000) return send(res, 200, Object.assign({}, prev, { stale: true, error: String(e && e.message || e) }), 'no-store');
     send(res, 502, { ok: false, error: String(e && e.message || e) });
   }
 };

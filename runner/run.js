@@ -39,8 +39,16 @@ function loadState(cfg) {
   return s;
 }
 
+let BOUNDS = {};
+try { BOUNDS = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'agent-bounds.json'), 'utf8')); } catch (e) { /* no bounds file → nothing tunable */ }
+/** Only keys listed in agent-bounds.json are tunable, and only inside their [min, max]. */
 function applyConfig(s, cfg) {
-  for (const k of ['maxSize', 'eventGuardH', 'maxMarkets', 'maxPerMarketFrac', 'gamma', 'gate', 'cooldownMin', 'rebalanceH', 'payoutFloor']) if (cfg[k] != null && isFinite(+cfg[k])) s.P[k] = +cfg[k];
+  for (const [k, b] of Object.entries(BOUNDS)) {
+    if (k.startsWith('_') || cfg[k] == null || !isFinite(+cfg[k])) continue;
+    const v = Math.min(b.max, Math.max(b.min, +cfg[k]));
+    if (v !== +cfg[k]) E.log(s, `CONFIG ${k}=${cfg[k]} outside [${b.min}, ${b.max}] → clamped to ${v}`, 'f');
+    if (s.P[k] !== v) { if (s.P[k] != null) E.log(s, `CONFIG ${k}: ${s.P[k]} → ${v}`, 'q'); s.P[k] = v; }
+  }
   if (process.env.TICK_SEC) s.P.tickSec = +process.env.TICK_SEC; // tests only
   const want = cfg.running !== false;
   if (want && !s.running) { s.running = true; s.startedAt = s.startedAt || Date.now(); s.lastTick = 0; for (const ms of Object.values(s.markets)) ms.lastT = Date.now();
@@ -97,6 +105,8 @@ async function main() {
   return 'done';
 }
 
+module.exports = { applyConfig };
+if (require.main !== module) return;
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { stopping = true; });
 main().then(async r => {
   if (r === 're-exec') { fs.rmSync(STATE, { force: true }); const cfg = readConfig(); const s = loadState(cfg); applyConfig(s, cfg); save(s, 'reset'); }

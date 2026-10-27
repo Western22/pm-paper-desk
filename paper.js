@@ -100,7 +100,7 @@ function step(ms, book, now, P, trades = null) {
     // 1a) taker trades since the quote went up: live, a taker at our price fills us even if the book never
     //     trades through. NO-token trades map to YES at 1 − p (BUY NO = SELL YES). At exactly our price we
     //     assume half the volume (queue ahead of us); strictly through our price → full volume.
-    const since = Math.max(q.t || 0, ms.lastTradeMs || 0);
+    const since = Math.max(q.t || 0, ms.lastTradeMs || 0) || now; // no posting time (legacy state) → never back-fill history
     const yesId = String(mk.tokens[0].id), noId = String(mk.tokens[1] && mk.tokens[1].id);
     let maxMs = ms.lastTradeMs || 0;
     for (const tr of trades) {

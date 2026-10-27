@@ -277,9 +277,11 @@ class Executor:
         if k is None:
             return False
         amt = float(amount)
-        self.pos[str(asset)] = self.pos.get(str(asset), 0.0) + (amt if side.upper() == "BUY" else -amt)
+        self.pos[str(asset)] = self.pos.get(str(asset), 0.0) + (
+            amt if side.upper() == "BUY" else -amt
+        )
         v = self.resting.pop(k)
-        left = k[3] - int(round(amt))
+        left = k[3] - round(amt)
         if left >= 1:
             self.resting[(k[0], k[1], k[2], left)] = v
         self.last_fill = time.time()
@@ -287,7 +289,11 @@ class Executor:
         return True
 
     async def on_trade(self, p):
-        if str(_attr(p, "status", default="")).upper() not in ("MATCHED", "MINED", "CONFIRMED"):
+        if str(_attr(p, "status", default="")).upper() not in (
+            "MATCHED",
+            "MINED",
+            "CONFIRMED",
+        ):
             return
         hit = False
         for mo in _attr(p, "maker_orders", default=()) or ():
@@ -296,13 +302,19 @@ class Executor:
             if tag in self.seen_fills:
                 continue
             amt = _attr(mo, "matched_amount", default=0)
-            if self.apply_fill(oid, _attr(mo, "asset_id"), str(_attr(mo, "side", default="")), amt):
+            if self.apply_fill(
+                oid, _attr(mo, "asset_id"), str(_attr(mo, "side", default="")), amt
+            ):
                 self.seen_fills.add(tag)
                 hit = True
-                log(f"FILL {_attr(mo, 'side')} {float(amt):.0f} @ {_attr(mo, 'price')} · asset …{str(_attr(mo, 'asset_id'))[-6:]}")
+                log(
+                    f"FILL {_attr(mo, 'side')} {float(amt):.0f} @ {_attr(mo, 'price')} · asset …{str(_attr(mo, 'asset_id'))[-6:]}"
+                )
         if hit:
             t0 = time.time()
-            await self.send({"type": "positions", "pos": self.pos, "kick": True})  # engine requotes in ~150 ms
+            await self.send(
+                {"type": "positions", "pos": self.pos, "kick": True}
+            )  # engine requotes in ~150 ms
             self.stats["fill_ms"].append((time.time() - t0) * 1000)
 
     async def user_stream(self):
@@ -458,7 +470,12 @@ class Executor:
         )
         tasks = [
             asyncio.create_task(c)
-            for c in (self.heartbeat(), self.read_engine(), self.positions_loop(), self.user_stream())
+            for c in (
+                self.heartbeat(),
+                self.read_engine(),
+                self.positions_loop(),
+                self.user_stream(),
+            )
         ]
         if RUN_SEC:
             asyncio.get_running_loop().call_later(RUN_SEC, self.stop.set)
@@ -481,9 +498,81 @@ class Executor:
             )
 
 
+# Polymarket restricts order placement by location (docs.polymarket.com/api-reference/geoblock).
+# Countries/regions where the API is blocked or close-only — never trade live from these.
+RESTRICTED = {
+    "IR",
+    "SY",
+    "CU",
+    "KP",
+    "UA-43",
+    "UA-14",
+    "UA-09",
+    "AR",
+    "AU",
+    "BY",
+    "BE",
+    "BI",
+    "BR",
+    "CA-BC",
+    "CA-ON",
+    "CA-AB",
+    "CA-QC",
+    "CF",
+    "CD",
+    "ET",
+    "FR",
+    "DE",
+    "IQ",
+    "IT",
+    "LB",
+    "LY",
+    "MM",
+    "NZ",
+    "NI",
+    "PL",
+    "RU",
+    "SG",
+    "SO",
+    "SK",
+    "SS",
+    "SD",
+    "TW",
+    "TH",
+    "GB",
+    "US",
+    "UM",
+    "VE",
+    "YE",
+    "ZW",
+}
+
+
+def geocheck():
+    """(ok, info) from Polymarket's own geoblock endpoint for this machine's IP."""
+    g = get_json("https://polymarket.com/api/geoblock")
+    c, r = str(g.get("country", "")).upper(), str(g.get("region", "")).upper()
+    bad = bool(g.get("blocked")) or c in RESTRICTED or f"{c}-{r}" in RESTRICTED
+    return (
+        not bad,
+        f"{g.get('ip')} · {c}{'-' + r if r else ''} · blocked={g.get('blocked')}",
+    )
+
+
 def main():
     if LIVE and not os.environ.get("POLYMARKET_PRIVATE_KEY"):
         sys.exit("LIVE=1 needs POLYMARKET_PRIVATE_KEY in the environment")
+    if LIVE:
+        try:
+            ok, info = geocheck()
+        except Exception as e:  # noqa: BLE001 — can't verify location → don't trade
+            sys.exit(f"geoblock check failed ({e}) — refusing to trade live")
+        log("location:", info)
+        if not ok:
+            sys.exit(
+                f"Polymarket restricts trading from this location ({info}) — refusing to trade live. "
+                "Run the server in an allowed region (e.g. Helsinki, Stockholm, Amsterdam, Madrid)."
+            )
     ex = Executor()
     loop = asyncio.new_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

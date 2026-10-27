@@ -1,0 +1,76 @@
+#cloud-config
+# UpCloud "User data" for an Ubuntu 24.04 server: installs and starts the live desk in DRY RUN.
+# Nothing trades until YOU edit /etc/pm-desk/env on the server and set LIVE=1 (see deploy/upcloud/README.md).
+# Recommended plan: 1 CPU / 1-2 GB. Region: an allowed one, e.g. Amsterdam, Helsinki, Stockholm, Madrid.
+
+package_update: true
+package_upgrade: true
+packages: [git, curl, ca-certificates, python3, python3-venv, ufw, unattended-upgrades, chrony]
+
+users:
+  - default
+  - name: desk
+    system: true
+    shell: /usr/sbin/nologin
+    homedir: /opt/pm-desk
+
+write_files:
+  - path: /etc/pm-desk/env
+    permissions: "0600"
+    owner: root:root
+    content: |
+      # ---- live desk settings (systemd EnvironmentFile) ----
+      # DRY RUN until you set LIVE=1. Keep this file 0600; never commit or paste the key anywhere.
+      LIVE=0
+      LIVE_MAX_USDC=50
+      MAX_LOSS_USDC=15
+      MAX_MARKETS=8
+      POLYMARKET_WALLET_ADDRESS=
+      POLYMARKET_PRIVATE_KEY=
+  - path: /etc/systemd/system/pm-live.service
+    content: |
+      [Unit]
+      Description=Polymarket liquidity desk — live executor + WebSocket engine
+      After=network-online.target time-sync.target
+      Wants=network-online.target
+
+      [Service]
+      User=desk
+      WorkingDirectory=/opt/pm-desk/app
+      EnvironmentFile=/etc/pm-desk/env
+      Environment=LIVE_STATE=/opt/pm-desk/run/live-state.json PYTHONUNBUFFERED=1
+      ExecStart=/opt/pm-desk/venv/bin/python bot/live_runner.py
+      Restart=always
+      RestartSec=5
+      # orders are cancelled on stop (SIGTERM → cancel_all); give it time
+      TimeoutStopSec=30
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ProtectHome=true
+      PrivateTmp=true
+      ReadWritePaths=/opt/pm-desk/run
+      MemoryMax=900M
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /usr/local/bin/pm-desk-update
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # pull the latest engine from GitHub and restart (orders are cancelled and re-placed)
+      set -e
+      sudo -u desk git -C /opt/pm-desk/app pull --ff-only
+      systemctl restart pm-live
+      journalctl -u pm-live -n 20 --no-pager
+
+runcmd:
+  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  - apt-get install -y nodejs
+  - mkdir -p /opt/pm-desk/run && chown -R desk:desk /opt/pm-desk
+  - sudo -u desk git clone https://github.com/Western22/pm-paper-desk.git /opt/pm-desk/app
+  - sudo -u desk python3 -m venv /opt/pm-desk/venv
+  - sudo -u desk /opt/pm-desk/venv/bin/pip install --quiet polymarket-client
+  - ufw default deny incoming && ufw allow OpenSSH && ufw --force enable
+  - systemctl enable --now chrony
+  - systemctl daemon-reload && systemctl enable --now pm-live
+  - sh /opt/pm-desk/app/deploy/upcloud/check.sh > /var/log/pm-desk-check.log 2>&1 || true

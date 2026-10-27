@@ -13,6 +13,7 @@ const path = require('path');
 const readline = require('readline');
 const E = require(path.join(__dirname, '..', 'lib', 'paper-engine.js'));
 const Q = require(path.join(__dirname, '..', 'engine.js'));
+const Core = require(path.join(__dirname, '..', 'paper.js'));
 const { ordersFor } = require(path.join(__dirname, 'decide.js'));
 
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
@@ -32,7 +33,28 @@ let pos = {}, posAt = 0;
 // ---------------------------------------------------------------- order books from the WebSocket
 const books = new Map(); // yes token → { bids: Map(price→size), asks: Map, tick, at }
 const byToken = () => { const m = new Map(); for (const [id, ms] of Object.entries(s.markets)) m.set(String(ms.meta.tokens[0].id), id); return m; };
-let tokenIdx = byToken();
+const byAnyToken = () => { const m = new Map(); for (const [id, ms] of Object.entries(s.markets)) ms.meta.tokens.forEach(t => m.set(String(t.id), id)); return m; };
+let tokenIdx = byToken(), anyIdx = byAnyToken();
+const MIN_REQUOTE_MS = +(process.env.MIN_REQUOTE_MS || 1000); // event-driven requotes, at most once per second
+
+/** Pull one market now (and its same-event siblings): executor cancels on receipt; engine stays out until coolUntil. */
+function pull(id, reason, coolMin) {
+  const ms = s.markets[id]; if (!ms) return;
+  const now = Date.now();
+  out({ type: 'pull', market: id, tokens: ms.meta.tokens.map(t => String(t.id)), reason });
+  ms.quote = null; ms.status = 'GATED'; ms.coolUntil = Math.max(ms.coolUntil || 0, now + coolMin * 60000);
+  E.log(s, `[${ms.meta.question.slice(0, 28)}] PULL — ${reason}`, 'g');
+  for (const sib of E.siblingPull(s, id, now, reason)) {
+    out({ type: 'pull', market: sib, tokens: s.markets[sib].meta.tokens.map(t => String(t.id)), reason: `sibling: ${reason}` });
+  }
+}
+let kickTimer = null, lastTickAt = 0;
+/** Re-run the engine soon after a book change / fill (debounced) instead of waiting for the next 5 s tick. */
+function kick() {
+  if (kickTimer) return;
+  const wait = Math.max(0, MIN_REQUOTE_MS - (Date.now() - lastTickAt));
+  kickTimer = setTimeout(() => { kickTimer = null; tick(); }, Math.max(wait, 150));
+}
 
 function asBook(b) {
   const lv = (m, desc) => [...m.entries()].filter(([, z]) => z > 0).sort((a, c) => desc ? c[0] - a[0] : a[0] - c[0]).map(([p, z]) => ({ price: String(p), size: String(z) }));
@@ -53,10 +75,8 @@ function dangerCheck(tok) {
   const mid = comp.mid, move = Math.abs(mid - ms.lastMid) * 100;
   const lim = Math.max(1.5, 0.4 * ms.meta.v); // same jump threshold as the engine's shock gate
   const crossed = (ms.quote.bs > 0 && ba <= ms.quote.bid - 1e-9) || (ms.quote.as > 0 && bb >= ms.quote.ask + 1e-9);
-  if (move >= lim || crossed) {
-    out({ type: 'pull', market: id, tokens: ms.meta.tokens.map(t => String(t.id)), reason: crossed ? 'book crossed our quote' : `mid moved ${move.toFixed(1)}¢` });
-    ms.quote = null; ms.cool = Math.ceil((s.P.cooldownMin || 20) * 60 / s.P.tickSec); // stay out until the gate cools
-  }
+  if (move >= lim || crossed) pull(id, crossed ? 'book crossed our quote' : `mid jumped ${move.toFixed(1)}¢`, s.P.cooldownMin || 20);
+  else kick(); // a competitor changed the book: re-optimise our quote now (hysteresis keeps queue if not worth it)
 }
 
 let ws = null, wsBackoff = 1000, subscribed = new Set();
@@ -64,7 +84,7 @@ function connect() {
   if (typeof WebSocket !== 'function') { info('no global WebSocket (need Node ≥ 22) — using HTTP books'); return; }
   ws = new WebSocket(WS_URL);
   ws.onopen = () => {
-    wsBackoff = 1000; subscribed = new Set(tokenIdx.keys());
+    wsBackoff = 1000; subscribed = new Set(anyIdx.keys());
     ws.send(JSON.stringify({ assets_ids: [...subscribed], type: 'market', custom_feature_enabled: true }));
     info(`ws open · ${subscribed.size} books`);
   };
@@ -87,6 +107,10 @@ function connect() {
         touched.forEach(dangerCheck);
       } else if (et === 'tick_size_change') {
         const b = books.get(m.asset_id); if (b) b.tick = +m.new_tick_size;
+      } else if (et === 'last_trade_price') {
+        const id = anyIdx.get(String(m.asset_id)); const ms = id && s.markets[id];
+        const why = ms && Core.toxicTrade(ms, { asset: m.asset_id, side: m.side, price: m.price, size: m.size }, s.P);
+        if (why) pull(id, 'toxic: ' + why, s.P.toxicCoolMin ?? 5);
       } else if (et === 'market_resolved') {
         const tok = (m.assets_ids || m.asset_ids || []).map(String).find(x => tokenIdx.has(x));
         if (tok) { const id = tokenIdx.get(tok); out({ type: 'pull', market: id, tokens: s.markets[id].meta.tokens.map(t => String(t.id)), reason: 'market resolved' }); }
@@ -97,9 +121,9 @@ function connect() {
   ws.onerror = () => { /* onclose follows */ };
 }
 function resubscribe() {
-  tokenIdx = byToken();
+  tokenIdx = byToken(); anyIdx = byAnyToken();
   if (!ws || ws.readyState !== 1) return;
-  const want = new Set(tokenIdx.keys());
+  const want = new Set(anyIdx.keys());
   const add = [...want].filter(x => !subscribed.has(x)), del = [...subscribed].filter(x => !want.has(x));
   if (add.length) ws.send(JSON.stringify({ assets_ids: add, operation: 'subscribe', custom_feature_enabled: true }));
   if (del.length) { ws.send(JSON.stringify({ assets_ids: del, operation: 'unsubscribe' })); del.forEach(x => books.delete(x)); }
@@ -111,7 +135,7 @@ setInterval(() => { if (ws && ws.readyState === 1) ws.send('PING'); }, 10000);
 // ---------------------------------------------------------------- inputs from the executor
 readline.createInterface({ input: process.stdin }).on('line', line => {
   let m; try { m = JSON.parse(line); } catch (e) { return; }
-  if (m.type === 'positions') { pos = m.pos || {}; posAt = Date.now(); }
+  if (m.type === 'positions') { pos = m.pos || {}; posAt = Date.now(); if (m.kick) kick(); } // kick: a fill just happened
   if (m.type === 'config') {
     if (m.capital) s.P.capital = +m.capital;
     for (const [k, v] of Object.entries(m.params || {})) if (v != null && isFinite(+v)) s.P[k] = +v;
@@ -121,8 +145,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 // ---------------------------------------------------------------- fixed-cadence engine tick
 let busy = false, lastSave = 0;
 async function tick() {
-  if (busy) return; busy = true;
-  const t0 = Date.now(), logStart = s.log.length;
+  if (busy) { kick(); return; } busy = true;
+  const t0 = Date.now(), logStart = s.log.length; lastTickAt = t0;
   try {
     for (const ms of Object.values(s.markets)) {
       const [yes, no] = ms.meta.tokens.map(t => String(t.id));

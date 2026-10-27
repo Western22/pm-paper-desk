@@ -130,8 +130,13 @@ class Executor:
             "placed": 0,
             "cancelled": 0,
             "rejected": 0,
+            "fills": 0,
             "pull_ms": [],
+            "fill_ms": [],
         }
+        self.pos = {}
+        self.last_fill = 0.0
+        self.seen_fills = set()
 
     # ------------------------------------------------------------ exchange
     async def connect(self):
@@ -265,6 +270,59 @@ class Executor:
                 log("cancel_all FAILED — check open orders on polymarket.com:", e)
         self.resting.clear()
 
+    # ------------------------------------------------------------ own fills (user channel)
+    def apply_fill(self, order_id, asset, side, amount):
+        """Instant inventory + resting-order update when one of our maker orders is matched."""
+        k = next((k for k, v in self.resting.items() if v["id"] == order_id), None)
+        if k is None:
+            return False
+        amt = float(amount)
+        self.pos[str(asset)] = self.pos.get(str(asset), 0.0) + (amt if side.upper() == "BUY" else -amt)
+        v = self.resting.pop(k)
+        left = k[3] - int(round(amt))
+        if left >= 1:
+            self.resting[(k[0], k[1], k[2], left)] = v
+        self.last_fill = time.time()
+        self.stats["fills"] += 1
+        return True
+
+    async def on_trade(self, p):
+        if str(_attr(p, "status", default="")).upper() not in ("MATCHED", "MINED", "CONFIRMED"):
+            return
+        hit = False
+        for mo in _attr(p, "maker_orders", default=()) or ():
+            oid = _attr(mo, "order_id")
+            tag = (str(_attr(p, "id")), str(oid))
+            if tag in self.seen_fills:
+                continue
+            amt = _attr(mo, "matched_amount", default=0)
+            if self.apply_fill(oid, _attr(mo, "asset_id"), str(_attr(mo, "side", default="")), amt):
+                self.seen_fills.add(tag)
+                hit = True
+                log(f"FILL {_attr(mo, 'side')} {float(amt):.0f} @ {_attr(mo, 'price')} · asset …{str(_attr(mo, 'asset_id'))[-6:]}")
+        if hit:
+            t0 = time.time()
+            await self.send({"type": "positions", "pos": self.pos, "kick": True})  # engine requotes in ~150 ms
+            self.stats["fill_ms"].append((time.time() - t0) * 1000)
+
+    async def user_stream(self):
+        if not LIVE:
+            return
+        from polymarket.streams import UserSpec
+
+        while not self.stop.is_set():
+            try:
+                async with await self.client.subscribe(UserSpec()) as stream:
+                    async with self.lock:
+                        await self.reconcile()  # the stream doesn't replay what was missed while disconnected
+                    log("user stream connected (instant fills)")
+                    async for ev in stream:
+                        if getattr(ev, "type", None) == "trade":
+                            await self.on_trade(ev.payload)
+            except Exception as e:  # noqa: BLE001 — reconnect; the positions poll still covers us
+                log("[user stream]", type(e).__name__, e)
+                await asyncio.sleep(2)
+
     # ------------------------------------------------------------ engine messages
     async def on_pull(self, m):
         t_recv = time.time()
@@ -361,7 +419,10 @@ class Executor:
                     )
                     self.stop.set()
                     break
-                await self.send({"type": "positions", "pos": pos})
+                # the data-api lags the matching engine: while fills are fresh, the streamed inventory wins
+                if time.time() - self.last_fill > 60 or not self.have_pos:
+                    self.pos = pos
+                await self.send({"type": "positions", "pos": self.pos})
                 self.have_pos = True
             except Exception as e:  # noqa: BLE001 — positions are retried; orders wait until we have them
                 log("[positions]", e)
@@ -397,7 +458,7 @@ class Executor:
         )
         tasks = [
             asyncio.create_task(c)
-            for c in (self.heartbeat(), self.read_engine(), self.positions_loop())
+            for c in (self.heartbeat(), self.read_engine(), self.positions_loop(), self.user_stream())
         ]
         if RUN_SEC:
             asyncio.get_running_loop().call_later(RUN_SEC, self.stop.set)

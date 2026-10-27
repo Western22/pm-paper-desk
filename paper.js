@@ -87,7 +87,8 @@ function step(ms, book, now, P, trades = null) {
     ms.dayReward = 0; ms.day = today;
   }
   const comp = book ? Q.competition(book, mk.v, mk.minSize) : null;
-  const dtMin = Math.min(Math.max((now - ms.lastT) / 60000, 0), 2); // cap gaps at 2 min
+  const dtRaw = Math.max((now - ms.lastT) / 60000, 0);
+  const dtMin = Math.min(dtRaw, 2); // cap gaps at 2 min
   ms.lastT = now; ms.aliveMs += dtMin * 60000;
   if (!comp) { ms.status = 'NO BOOK'; ms.quote = null; return ev; }
   const mid = comp.mid;
@@ -95,6 +96,7 @@ function step(ms, book, now, P, trades = null) {
 
   // 1) fills: did the live book trade through the resting paper quote?
   const q = ms.quote;
+  let toxicWhy = null;
   // live mode: fills come from the real wallet (caller sets ms.inv from positions) — no simulated fills
   if (q && !P.live && trades && trades.length) {
     // 1a) taker trades since the quote went up: live, a taker at our price fills us even if the book never
@@ -104,6 +106,7 @@ function step(ms, book, now, P, trades = null) {
     const yesId = String(mk.tokens[0].id), noId = String(mk.tokens[1] && mk.tokens[1].id);
     let maxMs = ms.lastTradeMs || 0;
     for (const tr of trades) {
+      if (+tr.timestamp * 1000 > since) { const why = toxicTrade(ms, tr, P); if (why) toxicWhy = why; }
       const tms = +tr.timestamp * 1000; if (!(tms > since)) continue;
       maxMs = Math.max(maxMs, tms);
       const isNo = String(tr.asset) === noId; if (!isNo && String(tr.asset) !== yesId) continue;
@@ -139,12 +142,13 @@ function step(ms, book, now, P, trades = null) {
     if (bs > 0 || as > 0) ms.quotedMs += dtMin * 60000; // one-sided quotes earn (⅓ score) too
   }
 
-  // 3) volatility EWMA (per tick → per minute)
-  const perMin = Math.sqrt(60 / P.tickSec);
+  // 3) volatility EWMA on real elapsed time (ticks can be event-driven and irregular): |Δmid|/√dt in ¢/√min,
+  //    with dt floored at 5 s so sub-second updates don't blow up bid/ask bounce
   let shock = false;
   if (ms.lastMid != null) {
-    const d = Math.abs(mid - ms.lastMid) * 100 * perMin;
-    const aF = 1 - Math.exp(-Math.LN2 * (P.tickSec / 60) / 5), aS = 1 - Math.exp(-Math.LN2 * (P.tickSec / 60) / 240);
+    const dtV = Math.min(Math.max(dtRaw, 5 / 60), 10);
+    const d = Math.abs(mid - ms.lastMid) * 100 / Math.sqrt(dtV);
+    const aF = 1 - Math.exp(-Math.LN2 * dtV / 5), aS = 1 - Math.exp(-Math.LN2 * dtV / 240);
     // a jump only matters if it's large vs the reward band; thin books tick by ½–1¢ without information
     shock = d > 4 * Math.max(ms.sigS, 0.02) && Math.abs(mid - ms.lastMid) * 100 >= Math.max(1.5, 0.4 * mk.v);
     ms.sigF += aF * (d - ms.sigF); ms.sigS += aS * (d - ms.sigS);
@@ -158,11 +162,17 @@ function step(ms, book, now, P, trades = null) {
     ms.status = 'EVENT GUARD'; ms.quote = null; return ev;
   }
   // absolute floor: below ~0.3¢/min a 60 s requote keeps up, so a calm-vs-calmer ratio is no reason to pull
+  if (ms.cool > 0) { ms.coolUntil = Math.max(ms.coolUntil || 0, now + ms.cool * (P.tickSec || 60) * 1000); ms.cool = 0; } // legacy tick-count cooldown
+  const cooling = (ms.coolUntil || 0) > now;
   if (shock || ms.sigF > Math.max(P.gate * ms.sigS, P.gateFloor ?? 0.3)) {
-    if (ms.cool <= 0) ev.push(`GATE — fast vol ${ms.sigF.toFixed(3)}¢/min vs slow ${ms.sigS.toFixed(3)}¢/min, pulling for ${P.cooldownMin} min`);
-    ms.cool = Math.ceil(P.cooldownMin * 60 / P.tickSec);
+    if (!cooling) ev.push(`GATE — ${shock ? 'jump' : 'fast vol'} ${ms.sigF.toFixed(3)}¢/min vs slow ${ms.sigS.toFixed(3)}¢/min, pulling for ${P.cooldownMin} min`);
+    ms.coolUntil = Math.max(ms.coolUntil || 0, now + P.cooldownMin * 60000);
   }
-  if (ms.cool > 0) { ms.cool--; ms.status = 'GATED'; ms.quote = null; return ev; }
+  if (toxicWhy) {
+    ev.push(`TOXIC — ${toxicWhy}, pulling for ${P.toxicCoolMin ?? 5} min`);
+    ms.coolUntil = Math.max(ms.coolUntil || 0, now + (P.toxicCoolMin ?? 5) * 60000);
+  }
+  if ((ms.coolUntil || 0) > now) { ms.status = 'GATED'; ms.quote = null; return ev; }
 
   // 5) capital: this market's budget minus USDC already tied up in inventory
   const budget = ms.budget || P.maxSize;
@@ -217,9 +227,44 @@ function step(ms, book, now, P, trades = null) {
   const used = nq.bid * Math.max(0, bs - longNo) + (1 - nq.ask) * Math.max(0, as - longYes);
   if (!q || q.bid !== nq.bid || q.ask !== nq.ask || Math.abs(q.bs - bs) > 1e-6 || Math.abs(q.as - as) > 1e-6)
     ev.push(`${q ? 'REQUOTE' : 'POST'} ${mode.toUpperCase()} bid ${nq.bid.toFixed(3)}×${bs} / ask ${nq.ask.toFixed(3)}×${as} · mid ${(mid * 100).toFixed(1)}¢ · d ${d.toFixed(2)}¢ · uses $${used.toFixed(2)} of $${free.toFixed(2)} free`);
+  // replace hysteresis: Polymarket has no amend, so every replace goes to the back of the queue. Keep the resting
+  // quote while it is no more aggressive than the new optimum, still scores ≥ (1 − replaceHyst) of it and sizes
+  // are close; replace at once when it would be riskier.
+  if (q && keepResting(q, nq, mk, mid, P, free, longYes, longNo)) {
+    ms.status = best ? 'QUOTING' : 'UNWIND'; ms.edge = best ? best.edge * 1440 : 0; return ev;
+  }
   nq.t = q && q.bid === nq.bid && q.ask === nq.ask && q.t ? q.t : now; // queue time: only trades after posting can fill
   ms.quote = nq; ms.status = best ? 'QUOTING' : 'UNWIND'; ms.edge = best ? best.edge * 1440 : 0;
   return ev;
+}
+
+const quoteScore = (q, mk, mid) => qmin(S(mk.v, (mid - q.bid) * 100) * (q.bs >= mk.minSize ? q.bs : 0), S(mk.v, (q.ask - mid) * 100) * (q.as >= mk.minSize ? q.as : 0), mid);
+function keepResting(q, nq, mk, mid, P, free, longYes, longNo) {
+  const h = P.replaceHyst ?? 0.1;
+  if (P.replaceHyst === 0) return false;
+  if ((q.mode || 'two') !== nq.mode) return false;
+  const slack = (mk.tick || 0.01) + 1e-9;                          // ≤ 1 tick more aggressive than wanted is tolerated
+  if (nq.bs > 0 && q.bid > nq.bid + slack) return false;           // more than that → risk, replace now
+  if (nq.as > 0 && q.ask < nq.ask - slack) return false;
+  const near = (a, b) => (a === 0) === (b === 0) && (b === 0 || Math.abs(a - b) <= 0.25 * b);
+  if (!near(q.bs, nq.bs) || !near(q.as, nq.as)) return false;
+  const used = q.bid * Math.max(0, q.bs - longNo) + (1 - q.ask) * Math.max(0, q.as - longYes);
+  if (used > free + 1e-9) return false;
+  const sNew = quoteScore(nq, mk, mid);
+  return sNew <= 0 ? false : quoteScore(q, mk, mid) >= (1 - h) * sNew;
+}
+/** Large taker trade at/through or within half a band of our resting quote → informed flow, step aside. */
+function toxicTrade(ms, tr, P) {
+  const q = ms.quote, mk = ms.meta; if (!q) return null;
+  const noId = String(mk.tokens[1] && mk.tokens[1].id), isNo = String(tr.asset) === noId;
+  if (!isNo && String(tr.asset) !== String(mk.tokens[0].id)) return null;
+  const side = isNo ? (tr.side === 'BUY' ? 'SELL' : 'BUY') : tr.side, px = isNo ? 1 - +tr.price : +tr.price, sz = +tr.size || 0;
+  const big = sz * px >= (P.toxicUsd ?? 100) || sz >= (P.toxicMult ?? 5) * mk.minSize;
+  if (!big) return null;
+  const band = mk.v / 200;
+  if (side === 'SELL' && q.bs > 0 && px <= q.bid + band) return `taker sold ${sz.toFixed(0)} @ ${px.toFixed(3)} near our bid ${q.bid.toFixed(3)}`;
+  if (side === 'BUY' && q.as > 0 && px >= q.ask - band) return `taker bought ${sz.toFixed(0)} @ ${px.toFixed(3)} near our ask ${q.ask.toFixed(3)}`;
+  return null;
 }
 
 function mtm(ms) { const mid = ms.lastMid ?? ms.meta.mid; return ms.cash + ms.inv * mid; }
@@ -255,7 +300,7 @@ function allocateCapital(cands, capital, floor, maxMarkets, chunk = 5, maxPer = 
   return cands.map((c, i) => { const q = budget[i] ? qAt(c, budget[i]) : null; return { i, budget: budget[i], edgeDay: cur[i], rewDay: q ? q.rewDay : 0, mode: q ? q.mode : null }; }).filter(r => r.budget > 0);
 }
 
-const PaperCore = { optimalQuote, step, newMarketState, mtm, locked, collateral, allocateCapital, utcDay, DEFAULTS };
+const PaperCore = { optimalQuote, step, newMarketState, mtm, locked, collateral, allocateCapital, utcDay, toxicTrade, keepResting, DEFAULTS };
 if (typeof module !== 'undefined' && module.exports) { module.exports = PaperCore; return; }
 root.PMPaper = PaperCore;
 /* ------------------------------------------------------------------ UI (client of /api/paper on Vercel) */

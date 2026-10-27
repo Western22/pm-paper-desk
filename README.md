@@ -30,3 +30,26 @@ Edits are picked up within ~5 minutes by the running job.
 `engine.js` (scoring, calibration) · `api/scan.js` (reward-market scanner + safety screen) · `.github/workflows/paper.yml`.
 
 Research tooling, not investment advice. Check Polymarket's terms and restricted-region list before trading real money.
+
+## Going live (your machine, your key)
+
+The paper engine above makes every decision; `bot/` runs the same engine against real money.
+
+```
+node bot/engine_server.js  ← Polymarket market WebSocket: live books, 5 s requotes,
+                              instant "pull" when the size-adjusted mid jumps ≥ max(1.5¢, 0.4·v) or crosses a quote
+python bot/live_runner.py  ← in-memory order diff, one cancel call, batched post-only placement (15/req),
+                              concurrent calls, 5 s heartbeat (server cancels your orders if this dies)
+```
+
+```bash
+pip install polymarket-client          # Node ≥ 22 also required
+python bot/live_runner.py              # DRY RUN: prints every order, sends nothing
+export POLYMARKET_PRIVATE_KEY=0x...    # never commit / paste this anywhere
+export POLYMARKET_WALLET_ADDRESS=0x...
+LIVE=1 LIVE_MAX_USDC=50 MAX_LOSS_USDC=15 python bot/live_runner.py
+```
+
+Kill switches: capital cap, wallet-P&L loss limit, no orders before positions are read, cancel-all if the
+engine goes silent 30 s, cancel-all on exit. Start small: paper rewards assume the pool split the engine
+sees; real competition and informed takers will be tougher. Redeem resolved winners on polymarket.com.

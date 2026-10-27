@@ -76,7 +76,7 @@ function collateral(ms) {
 }
 
 /** One tick for one market. `book` is the raw CLOB book. Returns event strings. */
-function step(ms, book, now, P) {
+function step(ms, book, now, P, trades = null) {
   const ev = [];
   const mk = ms.meta;
   // 0) UTC-day epoch settlement: Polymarket pays each market's daily reward at midnight UTC, only if ≥ $1
@@ -95,7 +95,32 @@ function step(ms, book, now, P) {
 
   // 1) fills: did the live book trade through the resting paper quote?
   const q = ms.quote;
-  if (q) {
+  // live mode: fills come from the real wallet (caller sets ms.inv from positions) — no simulated fills
+  if (q && !P.live && trades && trades.length) {
+    // 1a) taker trades since the quote went up: live, a taker at our price fills us even if the book never
+    //     trades through. NO-token trades map to YES at 1 − p (BUY NO = SELL YES). At exactly our price we
+    //     assume half the volume (queue ahead of us); strictly through our price → full volume.
+    const since = Math.max(q.t || 0, ms.lastTradeMs || 0);
+    const yesId = String(mk.tokens[0].id), noId = String(mk.tokens[1] && mk.tokens[1].id);
+    let maxMs = ms.lastTradeMs || 0;
+    for (const tr of trades) {
+      const tms = +tr.timestamp * 1000; if (!(tms > since)) continue;
+      maxMs = Math.max(maxMs, tms);
+      const isNo = String(tr.asset) === noId; if (!isNo && String(tr.asset) !== yesId) continue;
+      const side = isNo ? (tr.side === 'BUY' ? 'SELL' : 'BUY') : tr.side, px = isNo ? 1 - +tr.price : +tr.price, sz = +tr.size || 0;
+      if (side === 'SELL' && q.bs > 0 && px <= q.bid + 1e-9) {
+        const n = Math.min(q.bs, sz * (px < q.bid - 1e-9 ? 1 : 0.5)); if (n < 1) continue;
+        ms.cash -= q.bid * n; ms.inv += n; q.bs -= n; ms.fills++;
+        ev.push(`FILL buy ${n.toFixed(0)} YES @ ${q.bid.toFixed(3)} (taker sold ${sz.toFixed(0)} @ ${px.toFixed(3)})`);
+      } else if (side === 'BUY' && q.as > 0 && px >= q.ask - 1e-9) {
+        const n = Math.min(q.as, sz * (px > q.ask + 1e-9 ? 1 : 0.5)); if (n < 1) continue;
+        ms.cash += q.ask * n; ms.inv -= n; q.as -= n; ms.fills++;
+        ev.push(`FILL sell ${n.toFixed(0)} YES @ ${q.ask.toFixed(3)} (taker bought ${sz.toFixed(0)} @ ${px.toFixed(3)})`);
+      }
+    }
+    ms.lastTradeMs = maxMs;
+  }
+  if (q && !P.live) {
     if (q.bs > 0 && comp.bestAsk != null && comp.bestAsk <= q.bid + 1e-9) {
       ms.cash -= q.bid * q.bs; ms.inv += q.bs; ms.fills++;
       ev.push(`FILL buy ${q.bs.toFixed(0)} YES @ ${q.bid.toFixed(3)} (ask traded to ${comp.bestAsk.toFixed(3)})`);
@@ -192,6 +217,7 @@ function step(ms, book, now, P) {
   const used = nq.bid * Math.max(0, bs - longNo) + (1 - nq.ask) * Math.max(0, as - longYes);
   if (!q || q.bid !== nq.bid || q.ask !== nq.ask || Math.abs(q.bs - bs) > 1e-6 || Math.abs(q.as - as) > 1e-6)
     ev.push(`${q ? 'REQUOTE' : 'POST'} ${mode.toUpperCase()} bid ${nq.bid.toFixed(3)}×${bs} / ask ${nq.ask.toFixed(3)}×${as} · mid ${(mid * 100).toFixed(1)}¢ · d ${d.toFixed(2)}¢ · uses $${used.toFixed(2)} of $${free.toFixed(2)} free`);
+  nq.t = q && q.bid === nq.bid && q.ask === nq.ask && q.t ? q.t : now; // queue time: only trades after posting can fill
   ms.quote = nq; ms.status = best ? 'QUOTING' : 'UNWIND'; ms.edge = best ? best.edge * 1440 : 0;
   return ev;
 }

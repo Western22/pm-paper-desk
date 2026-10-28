@@ -31,6 +31,7 @@
     <button data-v="alloc"><span class="n">04</span>Allocator</button>
     <button data-v="paper"><span class="n">05</span>Paper Live</button>
     <button data-v="exec"><span class="n">06</span>Execution</button>
+    <button data-v="wallets"><span class="n">07</span>Wallets</button>
   </nav>
 
   <!-- 01 SCANNER -->
@@ -156,6 +157,14 @@
       <div class="scroll" style="max-height:320px"><table class="tbl"><thead><tr><th>UTC day</th><th>Equity</th><th>Rewards paid</th><th>Forfeited</th><th>Trading P&amp;L</th><th>Fills</th><th>Markets</th></tr></thead><tbody id="ppHist"></tbody></table></div></div>
   </section>
 
+  <!-- 07 WALLETS -->
+  <section class="view" id="v-wallets">
+    <div class="panel" style="margin-bottom:14px"><div class="ph"><h3>Who else made our trade — and are they any good?</h3><span class="sp"></span><span class="dim mono" id="wlAsOf" style="font-size:11px">loading…</span></div>
+      <div class="pb dim" style="font-size:12px;line-height:1.6">For every position the paper account holds: wallets that bought the same outcome in the last 7 days or are its biggest holders, with their P&amp;L in this market and their record (all-time P&amp;L and volume from Polymarket's leaderboard, last-30-day P&amp;L, hit rate of their 50 most recent closed positions).
+        <b class="pos">★ sharp</b> = directional, profitable all-time and this month, ≥55% recent hit rate. <b class="warn">M</b> = market maker (≥$1M volume at &lt;0.5% margin — a competitor for the reward pool, not a signal). Public on-chain data, shown by address and auto-pseudonym. Refreshed every 3 h.</div></div>
+    <div id="wlBody"></div>
+  </section>
+
   <!-- 06 EXECUTION -->
   <section class="view" id="v-exec">
     <div class="panel pipe" style="margin-bottom:14px"><div class="ph"><h3>Production loop</h3></div><div class="pb" id="pipe"></div></div>
@@ -191,5 +200,6 @@
 <script src="/app.js"></script>
 <script src="/safe.js"></script>
 <script src="/paper.js"></script>
+<script src="/wallets.js"></script>
 </body>
 </html>

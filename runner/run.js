@@ -8,6 +8,8 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const E = require('../lib/paper-engine.js');
+const Peers = require('../lib/peers.js');
+let peersBusy = false, lastPeers = 0;
 
 const ROOT = path.resolve(__dirname, '..');
 const STATE_DIR = path.join(ROOT, 'state');
@@ -96,6 +98,14 @@ async function main() {
         if ((c2.resetId || 0) !== (s.resetId || 0)) { save(s, 'pre-reset'); console.log('reset requested → restarting fresh'); return 're-exec'; }
         cfg = c2; applyConfig(s, cfg);
       } catch (e) { console.error('config read failed', e.message); }
+    }
+    // peer wallets: every peersH (3 h) in the background — never delays a tick; published as state/peers.json
+    if (s.running && !peersBusy && Date.now() - lastPeers > (s.P.peersH || 3) * 3.6e6) {
+      peersBusy = true; lastPeers = Date.now();
+      Peers.trackPeers(Peers.fromState(s))
+        .then(r => { fs.writeFileSync(path.join(STATE_DIR, 'peers.json'), JSON.stringify(r)); E.log(s, `PEERS — ${r.markets.length} positions: ${r.markets.filter(m => /other side/.test(m.verdict)).length} with sharp money on the other side`, 'q'); })
+        .catch(e => E.log(s, 'PEERS failed: ' + (e.message || e), 'f'))
+        .finally(() => { peersBusy = false; });
     }
     if (notable || Date.now() - lastSave > SAVE_MS) save(s, notable ? 'event' : 'periodic');
     await sleep(Math.max(1000, s.P.tickSec * 1000 - (Date.now() - started)));

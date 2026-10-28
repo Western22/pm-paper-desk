@@ -213,6 +213,14 @@ function step(ms, book, now, P, trades = null) {
   } else {                               // unwind only
     if (ms.inv > 0) as = Math.max(mk.minSize, ms.inv); else bs = Math.max(mk.minSize, -ms.inv);
   }
+  // sharp money on the other side (peer-wallet report): never move further towards the avoided outcome —
+  // the bid leg adds YES exposure, the ask leg adds NO exposure; the reducing leg keeps quoting (⅓ score)
+  const avoid = ms.avoid && ms.avoid.until > now ? ms.avoid.side : null;
+  if (avoid === 'YES' && bs > 0) bs = 0;
+  if (avoid === 'NO' && as > 0) as = 0;
+  if (avoid && ms.avoidLogged !== avoid) { ev.push(`SHARP — sharper wallets hold the other side: not adding ${avoid}, quoting only to reduce`); ms.avoidLogged = avoid; }
+  if (!avoid) ms.avoidLogged = null;
+  if (avoid && bs === 0 && as === 0) { ms.status = 'SHARP'; ms.quote = null; ms.edge = 0; return ev; }
   // hard capital check: only legs not covered by held shares need USDC; shrink them to fit the free budget
   let collB = Math.max(0, bs - longNo), collA = Math.max(0, as - longYes);
   const need = bid * collB + (1 - ask) * collA;

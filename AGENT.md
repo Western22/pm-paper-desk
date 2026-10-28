@@ -36,3 +36,5 @@ parameters **for the paper account only**. You never touch execution code or rea
 | `stopFrac` | tolerate bigger per-market losses | STOP-LOSS count, recovered vs not |
 | `rivalFrac` | assume more competition when allocating | expected vs realised reward per market |
 | `maxMarkets`, `maxPerMarketFrac`, `maxPerEvent` | diversification | concentration of losses |
+| `mmPenalty` | avoid markets with rival market makers more | reward share in new markets vs `rival makers` at ALLOCATE |
+| `hourCut` | smaller cut in losing hours (1 = off) | ledger `hourly`: reward vs trading per UTC hour |

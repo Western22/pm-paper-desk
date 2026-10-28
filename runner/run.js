@@ -103,7 +103,7 @@ async function main() {
     if (s.running && !peersBusy && Date.now() - lastPeers > (s.P.peersH || 3) * 3.6e6) {
       peersBusy = true; lastPeers = Date.now();
       Peers.trackPeers(Peers.fromState(s))
-        .then(r => { fs.writeFileSync(path.join(STATE_DIR, 'peers.json'), JSON.stringify(r)); E.applyPeerVerdicts(s, r); E.log(s, `PEERS — ${r.markets.length} positions: ${r.markets.filter(m => /other side/.test(m.verdict)).length} with sharp money on the other side`, 'q'); })
+        .then(r => { fs.writeFileSync(path.join(STATE_DIR, 'peers.json'), JSON.stringify(r)); E.applyPeerVerdicts(s, r); E.learnMakers(s, r); E.log(s, `PEERS — ${r.markets.length} positions: ${r.markets.filter(m => /other side/.test(m.verdict)).length} with sharp money on the other side`, 'q'); })
         .catch(e => E.log(s, 'PEERS failed: ' + (e.message || e), 'f'))
         .finally(() => { peersBusy = false; });
     }

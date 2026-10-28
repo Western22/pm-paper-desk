@@ -175,7 +175,8 @@ function step(ms, book, now, P, trades = null) {
   if ((ms.coolUntil || 0) > now) { ms.status = 'GATED'; ms.quote = null; return ev; }
 
   // 5) capital: this market's budget minus USDC already tied up in inventory
-  const budget = ms.budget || P.maxSize;
+  // hour-of-day sizing: in hours where trading losses have beaten rewards, quote with part of the budget
+  const budget = (ms.budget || P.maxSize) * Math.min(1, Math.max(0.1, P.hourMultNow ?? 1));
   const free = Math.max(0, budget - locked(ms));
   const invCap = Math.max(mk.minSize, P.invCapFrac * budget / Math.max(Math.min(mid, 1 - mid), 0.05));
   const longYes = Math.max(ms.inv, 0), longNo = Math.max(-ms.inv, 0); // held shares can be SOLD with no new collateral

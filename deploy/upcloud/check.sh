@@ -20,4 +20,4 @@ done
 echo
 echo "== Engine dry-run (150 s: first market scan takes ~1 min; no orders, no key needed) =="
 cd /opt/pm-desk/app 2>/dev/null || cd "$(dirname "$0")/../.."
-LIVE=0 RUN_SEC=150 LIVE_STATE=/tmp/pm-check-state.json timeout 200 python3 bot/live_runner.py 2>&1 | tail -15
+LIVE=0 RUN_SEC=150 DASH_PORT=0 LIVE_STATE=/tmp/pm-check-state.json timeout 200 python3 bot/live_runner.py 2>&1 | tail -40

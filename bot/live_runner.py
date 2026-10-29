@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
 import json
 import os
 import signal
@@ -51,7 +52,9 @@ MAX_LOSS = float(os.environ.get("MAX_LOSS_USDC", "15"))
 MAX_MARKETS = int(os.environ.get("MAX_MARKETS", "8"))
 POS_SEC = float(os.environ.get("POS_SEC", "5"))
 RECONCILE_SEC = 60.0
-DASH_HOST = os.environ.get("DASH_HOST", "127.0.0.1")  # local only: view through an SSH tunnel
+DASH_HOST = os.environ.get(
+    "DASH_HOST", "127.0.0.1"
+)  # local only: view through an SSH tunnel
 DASH_PORT = int(os.environ.get("DASH_PORT", "8080"))
 RUN_SEC = float(
     os.environ.get("RUN_SEC", "0")
@@ -92,10 +95,18 @@ def fetch_positions():
     )
     POSITION_ROWS.clear()
     POSITION_ROWS.extend(
-        {"asset": str(p.get("asset")), "title": p.get("title"), "outcome": p.get("outcome"), "size": float(p.get("size") or 0),
-         "avg": float(p.get("avgPrice") or 0), "cur": float(p.get("curPrice") or 0), "pnl": float(p.get("cashPnl") or 0),
-         "redeemable": bool(p.get("redeemable"))}
-        for p in rows if float(p.get("size") or 0) > 0
+        {
+            "asset": str(p.get("asset")),
+            "title": p.get("title"),
+            "outcome": p.get("outcome"),
+            "size": float(p.get("size") or 0),
+            "avg": float(p.get("avgPrice") or 0),
+            "cur": float(p.get("curPrice") or 0),
+            "pnl": float(p.get("cashPnl") or 0),
+            "redeemable": bool(p.get("redeemable")),
+        }
+        for p in rows
+        if float(p.get("size") or 0) > 0
     )
     return pos, pnl
 
@@ -450,7 +461,11 @@ class Executor:
         while not self.stop.is_set():
             try:
                 d = await asyncio.to_thread(get_json, url, 20)
-                self.paper = {"totals": d.get("totals"), "history": (d.get("history") or [])[-7:], "at": time.time()}
+                self.paper = {
+                    "totals": d.get("totals"),
+                    "history": (d.get("history") or [])[-7:],
+                    "at": time.time(),
+                }
             except Exception as e:  # noqa: BLE001 — comparison panel only
                 log("[paper]", e)
             await asyncio.sleep(300)
@@ -523,7 +538,11 @@ class Executor:
         if DASH_PORT:
             from dashboard import serve  # bot/dashboard.py
 
-            tasks.append(asyncio.create_task(serve(self, DASH_HOST, DASH_PORT, sys.modules[__name__])))
+            tasks.append(
+                asyncio.create_task(
+                    serve(self, DASH_HOST, DASH_PORT, sys.modules[__name__])
+                )
+            )
         if RUN_SEC:
             asyncio.get_running_loop().call_later(RUN_SEC, self.stop.set)
         try:
@@ -532,8 +551,18 @@ class Executor:
             for t in tasks:
                 t.cancel()
             await self.cancel_all("shutdown")
+            await asyncio.gather(
+                *tasks, return_exceptions=True
+            )  # let cancelled tasks finish
             if self.engine.returncode is None:
+                with contextlib.suppress(Exception):
+                    self.engine.stdin.close()  # engine exits on stdin EOF
                 self.engine.terminate()
+                try:  # reap the child inside the loop, so nothing is cleaned up after it closes
+                    await asyncio.wait_for(self.engine.wait(), 5)
+                except asyncio.TimeoutError:
+                    self.engine.kill()
+                    await self.engine.wait()
             p = sorted(self.stats["pull_ms"])
             log(
                 f"stats: placed {self.stats['placed']} · cancelled {self.stats['cancelled']} · rejected {self.stats['rejected']} · pulls {self.stats['pulls']}"

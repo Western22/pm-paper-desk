@@ -20,6 +20,15 @@ journalctl -u pm-live -f                # live log (dry run: "[dry] place …")
 ```
 Pick the allowed region with the lowest `tls`/`total` times; if two are close, prefer Amsterdam.
 
+## Live dashboard (private)
+The bot serves a live page on the server itself (port 8080, not reachable from the internet). From your PC:
+```powershell
+ssh -L 8080:localhost:8080 root@<server-ip>
+```
+keep that window open and browse to **http://localhost:8080** — mode, wallet P&L vs loss limit, capital in orders,
+resting orders, positions, engine markets, fills/pulls with latency, live events, and the paper account alongside.
+Refreshes every 2 s; read-only; the key never appears in it.
+
 ## 3. Go live (small)
 ```bash
 nano /etc/pm-desk/env                   # set POLYMARKET_WALLET_ADDRESS, POLYMARKET_PRIVATE_KEY, LIVE=1

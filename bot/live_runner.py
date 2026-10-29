@@ -34,6 +34,7 @@ place_limit_order, list_open_orders, cancel_orders, cancel_all, send_order_heart
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import os
 import signal
@@ -50,17 +51,27 @@ MAX_LOSS = float(os.environ.get("MAX_LOSS_USDC", "15"))
 MAX_MARKETS = int(os.environ.get("MAX_MARKETS", "8"))
 POS_SEC = float(os.environ.get("POS_SEC", "5"))
 RECONCILE_SEC = 60.0
+DASH_HOST = os.environ.get("DASH_HOST", "127.0.0.1")  # local only: view through an SSH tunnel
+DASH_PORT = int(os.environ.get("DASH_PORT", "8080"))
 RUN_SEC = float(
     os.environ.get("RUN_SEC", "0")
 )  # >0: stop after this many seconds (tests)
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 STATE = Path(os.environ.get("LIVE_STATE", HERE / "run" / "live-state.json"))
 DATA = "https://data-api.polymarket.com"
 BATCH = 15
 
 
+EVENTS = collections.deque(maxlen=400)  # recent log lines for the live dashboard
+LOCATION = {"info": "not checked (dry run)"}
+POSITION_ROWS = []  # latest wallet positions (data-api), for the dashboard
+
+
 def log(*a):
-    print(time.strftime("%H:%M:%S"), *a, flush=True)
+    line = " ".join(str(x) for x in a)
+    EVENTS.append({"t": time.time(), "msg": line})
+    print(time.strftime("%H:%M:%S"), line, flush=True)
 
 
 def get_json(url, timeout=10):
@@ -78,6 +89,13 @@ def fetch_positions():
     pos = {str(p.get("asset")): float(p.get("size") or 0) for p in rows}
     pnl = sum(
         float(p.get("cashPnl") or 0) + float(p.get("realizedPnl") or 0) for p in rows
+    )
+    POSITION_ROWS.clear()
+    POSITION_ROWS.extend(
+        {"asset": str(p.get("asset")), "title": p.get("title"), "outcome": p.get("outcome"), "size": float(p.get("size") or 0),
+         "avg": float(p.get("avgPrice") or 0), "cur": float(p.get("curPrice") or 0), "pnl": float(p.get("cashPnl") or 0),
+         "redeemable": bool(p.get("redeemable"))}
+        for p in rows if float(p.get("size") or 0) > 0
     )
     return pos, pnl
 
@@ -137,6 +155,14 @@ class Executor:
         self.pos = {}
         self.last_fill = 0.0
         self.seen_fills = set()
+        # dashboard state
+        self.started = time.time()
+        self.pnl = 0.0
+        self.markets = []
+        self.cost = 0.0
+        self.last_hb_ok = 0.0
+        self.last_sync = 0.0
+        self.paper = None
 
     # ------------------------------------------------------------ exchange
     async def connect(self):
@@ -166,6 +192,7 @@ class Executor:
                         heartbeat_id=e.heartbeat_id
                     )
                 self.hb_id = hb.heartbeat_id
+                self.last_hb_ok = time.time()
             except Exception as e:  # noqa: BLE001 — keep the dead-man switch alive through blips
                 log("[heartbeat]", type(e).__name__, e)
                 self.hb_id = ""
@@ -360,7 +387,10 @@ class Executor:
         if not self.have_pos:
             return
         orders = m["orders"]
+        self.markets = m.get("markets") or self.markets
         cost = sum(o["price"] * o["size"] for o in orders if o["side"] == "BUY")
+        self.cost = cost
+        self.last_sync = time.time()
         if cost > MAX_USDC * 1.05:
             await self.cancel_all(
                 f"engine asked for ${cost:.2f} BUY collateral > cap ${MAX_USDC}"
@@ -414,6 +444,17 @@ class Executor:
             elif ty == "info":
                 log("  engine:", m.get("msg"))
 
+    async def paper_loop(self):
+        """Paper account totals (public ledger), refreshed every 5 min for the live-vs-paper panel."""
+        url = "https://raw.githubusercontent.com/Western22/pm-paper-desk/paper-state/ledger.json"
+        while not self.stop.is_set():
+            try:
+                d = await asyncio.to_thread(get_json, url, 20)
+                self.paper = {"totals": d.get("totals"), "history": (d.get("history") or [])[-7:], "at": time.time()}
+            except Exception as e:  # noqa: BLE001 — comparison panel only
+                log("[paper]", e)
+            await asyncio.sleep(300)
+
     async def send(self, obj):
         self.engine.stdin.write((json.dumps(obj) + "\n").encode())
         await self.engine.stdin.drain()
@@ -425,6 +466,7 @@ class Executor:
                 pos, pnl = await asyncio.to_thread(fetch_positions)
                 if self.pnl0 is None:
                     self.pnl0 = pnl
+                self.pnl = pnl - self.pnl0
                 if pnl - self.pnl0 < -MAX_LOSS:
                     await self.cancel_all(
                         f"loss limit: P&L {pnl - self.pnl0:+.2f} < -{MAX_LOSS}"
@@ -475,8 +517,13 @@ class Executor:
                 self.read_engine(),
                 self.positions_loop(),
                 self.user_stream(),
+                self.paper_loop(),
             )
         ]
+        if DASH_PORT:
+            from dashboard import serve  # bot/dashboard.py
+
+            tasks.append(asyncio.create_task(serve(self, DASH_HOST, DASH_PORT, sys.modules[__name__])))
         if RUN_SEC:
             asyncio.get_running_loop().call_later(RUN_SEC, self.stop.set)
         try:
@@ -568,6 +615,7 @@ def main():
         except Exception as e:  # noqa: BLE001 — can't verify location → don't trade
             sys.exit(f"geoblock check failed ({e}) — refusing to trade live")
         log("location:", info)
+        LOCATION["info"] = info
         if not ok:
             sys.exit(
                 f"Polymarket restricts trading from this location ({info}) — refusing to trade live. "

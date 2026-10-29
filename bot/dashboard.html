@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Desk</title>
+<style>
+  :root { --bg:#070b12; --panel:#0d1420; --line:#1c2738; --tx:#e6edf7; --tx2:#8b9ab3; --mint:#3dffa8; --amber:#ffb547; --red:#ff5d73; --cyan:#5ad1ff;
+          --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg:#f5f7fb; --panel:#fff; --line:#dfe5ee; --tx:#121826; --tx2:#5b6576; --mint:#0a9d63; --amber:#b86e00; --red:#c8243c; --cyan:#0a78b0; } }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--tx); font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:14px 16px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:2 }
+  h1 { font-size:16px; margin:0 8px 0 0; letter-spacing:.02em }
+  .pill { font-family:var(--mono); font-size:12px; padding:4px 10px; border-radius:99px; border:1px solid var(--line); color:var(--tx2); white-space:nowrap }
+  .pill.live { color:var(--bg); background:var(--red); border-color:var(--red); font-weight:700 }
+  .pill.dry { color:var(--bg); background:var(--amber); border-color:var(--amber); font-weight:700 }
+  .ok { color:var(--mint) } .bad { color:var(--red) } .warn { color:var(--amber) } .dim { color:var(--tx2) }
+  main { padding:16px; display:grid; gap:14px; max-width:1300px; margin:0 auto }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:10px }
+  .kpi, .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px }
+  .kpi { padding:12px 14px } .kpi .l { color:var(--tx2); font-size:12px } .kpi .v { font-family:var(--mono); font-size:22px; margin-top:4px }
+  .bar { height:6px; background:var(--line); border-radius:9px; margin-top:8px; overflow:hidden } .bar i { display:block; height:100%; background:var(--mint) }
+  .panel h2 { font-size:13px; margin:0; padding:12px 14px; border-bottom:1px solid var(--line); color:var(--tx2); font-weight:600; letter-spacing:.03em; text-transform:uppercase }
+  .scroll { overflow-x:auto }
+  table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px }
+  th, td { text-align:left; padding:7px 14px; border-bottom:1px solid var(--line); white-space:nowrap } th { color:var(--tx2); font-weight:500 }
+  td.q { white-space:normal; min-width:220px; font-family:system-ui, sans-serif }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px } @media (max-width:900px) { .grid2 { grid-template-columns:1fr } }
+  #events { font-family:var(--mono); font-size:12px; max-height:360px; overflow:auto; padding:8px 14px; margin:0; list-style:none }
+  #events li { padding:2px 0; border-bottom:1px dashed var(--line); word-break:break-word }
+  .empty { padding:14px; color:var(--tx2) }
+</style>
+</head>
+<body>
+<header>
+  <h1>Live Desk</h1>
+  <span class="pill" id="mode">connecting…</span>
+  <span class="pill" id="loc">location —</span>
+  <span class="pill" id="hb">heartbeat —</span>
+  <span class="pill" id="eng">engine —</span>
+  <span class="pill" id="upd">—</span>
+</header>
+<main>
+  <section class="kpis">
+    <div class="kpi"><div class="l">Wallet P&amp;L since start</div><div class="v" id="pnl">—</div>
+      <div class="bar"><i id="lossbar" style="width:0"></i></div><div class="l" id="losslbl">loss limit —</div></div>
+    <div class="kpi"><div class="l">Capital in orders</div><div class="v" id="cap">—</div><div class="bar"><i id="capbar" style="width:0"></i></div></div>
+    <div class="kpi"><div class="l">Markets · resting orders</div><div class="v" id="mk">—</div></div>
+    <div class="kpi"><div class="l">Fills · pulls</div><div class="v" id="fp">—</div><div class="l" id="lat">pull latency —</div></div>
+    <div class="kpi"><div class="l">Placed · cancelled · rejected</div><div class="v" id="pcr">—</div></div>
+    <div class="kpi"><div class="l">Paper account (same engine)</div><div class="v" id="paper">—</div><div class="l" id="paper2">—</div></div>
+  </section>
+  <section class="panel"><h2>Resting orders</h2><div class="scroll"><table><thead><tr><th>Market</th><th>Outcome</th><th>Side</th><th>Price</th><th>Shares</th><th>USDC</th></tr></thead><tbody id="orders"></tbody></table></div></section>
+  <div class="grid2">
+    <section class="panel"><h2>Positions (wallet)</h2><div class="scroll"><table><thead><tr><th>Market</th><th>Outcome</th><th>Shares</th><th>Avg</th><th>Now</th><th>P&amp;L</th></tr></thead><tbody id="positions"></tbody></table></div></section>
+    <section class="panel"><h2>Markets (engine)</h2><div class="scroll"><table><thead><tr><th>Market</th><th>Status</th><th>Inventory</th><th>Mid</th><th>Feed</th></tr></thead><tbody id="markets"></tbody></table></div></section>
+  </div>
+  <section class="panel"><h2>Events</h2><ul id="events"></ul></section>
+</main>
+<script>
+(function () {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const usd = x => x == null ? '—' : (x >= 0 ? '+$' : '−$') + Math.abs(x).toFixed(2);
+  const cls = x => x == null ? 'dim' : x > 0 ? 'ok' : x < 0 ? 'bad' : 'dim';
+  const ago = s => s == null ? '—' : s < 60 ? Math.round(s) + 's' : s < 3600 ? Math.round(s / 60) + 'm' : (s / 3600).toFixed(1) + 'h';
+  // build rows with textContent only: market names are external data
+  function rows(tbody, items, cells, emptyText, cols) {
+    tbody.replaceChildren();
+    if (!items.length) { const tr = tbody.insertRow(), td = tr.insertCell(); td.colSpan = cols; td.className = 'empty'; td.textContent = emptyText; return; }
+    for (const it of items) {
+      const tr = tbody.insertRow();
+      for (const [text, c] of cells(it)) { const td = tr.insertCell(); td.textContent = text; if (c) td.className = c; }
+    }
+  }
+  function pill(id, text, c) { const el = $(id); el.textContent = text; el.className = 'pill ' + (c || ''); }
+
+  function render(s) {
+    pill('mode', s.mode, s.mode === 'LIVE' ? 'live' : 'dry');
+    pill('loc', s.location || 'location —');
+    pill('hb', 'heartbeat ' + (s.mode === 'LIVE' ? ago(s.heartbeatAgeSec) : 'off (dry)'), s.mode === 'LIVE' && (s.heartbeatAgeSec == null || s.heartbeatAgeSec > 12) ? 'warn' : '');
+    pill('eng', 'engine ' + ago(s.engineAgeSec), s.engineAgeSec > 20 ? 'warn' : '');
+    pill('upd', 'up ' + ago(s.uptimeSec) + ' · ' + new Date(s.now * 1000).toLocaleTimeString());
+    $('pnl').textContent = usd(s.pnl); $('pnl').className = 'v ' + cls(s.pnl);
+    $('lossbar').style.width = Math.min(100, s.lossUsedPct) + '%'; $('lossbar').style.background = s.lossUsedPct > 66 ? 'var(--red)' : s.lossUsedPct > 33 ? 'var(--amber)' : 'var(--mint)';
+    $('losslbl').textContent = `loss limit $${s.maxLoss} · ${s.lossUsedPct}% used`;
+    $('cap').textContent = `$${s.collateral.toFixed(2)} / $${s.capital}`;
+    $('capbar').style.width = Math.min(100, s.collateral / s.capital * 100) + '%';
+    $('mk').textContent = `${s.markets.length} · ${s.orders.length}`;
+    $('fp').textContent = `${s.stats.fills || 0} · ${s.stats.pulls || 0}`;
+    $('lat').textContent = s.pullMs.n ? `pull latency p50 ${s.pullMs.p50} ms · max ${s.pullMs.max} ms` : 'pull latency — (no pulls yet)';
+    $('pcr').textContent = `${s.stats.placed || 0} · ${s.stats.cancelled || 0} · ${s.stats.rejected || 0}`;
+    $('pcr').className = 'v ' + (s.stats.rejected ? 'warn' : '');
+    if (s.paper && s.paper.totals) {
+      const t = s.paper.totals, h = s.paper.history || [], last = h.length > 1 ? h[h.length - 1].paid - h[h.length - 2].paid : null;
+      $('paper').textContent = `$${t.equity.toFixed(0)}`;
+      $('paper2').textContent = `from $${t.capital} · last payout ${last == null ? '—' : '$' + last.toFixed(2)} · trading ${usd(t.trade)}`;
+    }
+    rows($('orders'), s.orders, o => [[o.question, 'q'], [o.outcome], [o.side, o.side === 'BUY' ? 'ok' : 'warn'], [o.price.toFixed(3)], [String(o.size)], ['$' + o.usd.toFixed(2)]],
+      s.mode === 'LIVE' ? 'No resting orders.' : 'No orders (dry run: these are the orders it would place).', 6);
+    rows($('positions'), s.positions || [], p => [[p.title || p.asset, 'q'], [p.outcome || ''], [p.size.toFixed(1)], [p.avg.toFixed(3)], [p.cur.toFixed(3)], [usd(p.pnl) + (p.redeemable ? ' · redeem' : ''), cls(p.pnl)]],
+      s.mode === 'LIVE' ? 'No positions.' : 'Wallet not connected (dry run).', 6);
+    rows($('markets'), s.markets, m => [[m.question || '', 'q'], [m.status || '', /QUOTING/.test(m.status) ? 'ok' : /GATED|SHARP|EVENT/.test(m.status) ? 'warn' : 'dim'],
+      [m.inv == null ? '—' : m.inv.toFixed(1)], [m.mid == null ? '—' : (m.mid * 100).toFixed(1) + '¢'], [m.ws ? 'live' : 'http', m.ws ? 'ok' : 'warn']],
+      'Engine is choosing markets (first scan takes about a minute)…', 5);
+    const ul = $('events'); ul.replaceChildren();
+    for (const e of s.events.slice().reverse()) {
+      const li = document.createElement('li'), t = document.createElement('span');
+      t.className = 'dim'; t.textContent = new Date(e.t * 1000).toLocaleTimeString() + '  ';
+      li.append(t, document.createTextNode(e.msg));
+      if (/PULL|REJECTED|CANCEL ALL|FAILED|loss limit/i.test(e.msg)) li.className = 'warn';
+      if (/FILL /.test(e.msg)) li.className = 'ok';
+      ul.append(li);
+    }
+  }
+  let fails = 0;
+  async function tick() {
+    try {
+      const r = await fetch('/status', { cache: 'no-store' });
+      render(await r.json()); fails = 0;
+    } catch (e) { if (++fails > 2) pill('mode', 'bot not reachable — is the service running / SSH tunnel open?', 'warn'); }
+    setTimeout(tick, 2000);
+  }
+  tick();
+})();
+</script>
+</body>
+</html>

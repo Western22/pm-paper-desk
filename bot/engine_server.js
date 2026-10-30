@@ -137,7 +137,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   let m; try { m = JSON.parse(line); } catch (e) { return; }
   if (m.type === 'positions') { pos = m.pos || {}; posAt = Date.now(); if (m.kick) kick(); } // kick: a fill just happened
   if (m.type === 'config') {
-    if (m.capital) s.P.capital = +m.capital;
+    if (m.capital) {
+      if (+m.capital > (s.P.capital || 0) + 1) s.lastRebalance = 0; // raised cap → allocate the new money now
+      s.P.capital = +m.capital;
+    }
     for (const [k, v] of Object.entries(m.params || {})) if (v != null && isFinite(+v)) s.P[k] = +v;
   }
 }).on('close', () => process.exit(0));

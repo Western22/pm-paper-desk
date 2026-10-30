@@ -52,7 +52,8 @@ MAX_LOSS = float(os.environ.get("MAX_LOSS_USDC", "15"))
 MAX_MARKETS = int(os.environ.get("MAX_MARKETS", "8"))
 # diversify: no market gets more than this share of capital (0 = let the optimiser concentrate)
 SPREAD_FRAC = float(os.environ.get("SPREAD_FRAC", "0.3"))
-POS_SEC = float(os.environ.get("POS_SEC", "5"))
+# holdings poll; fills arrive instantly on the user stream, so 10 s is plenty (5 s hit data-api 429s)
+POS_SEC = float(os.environ.get("POS_SEC", "10"))
 RECONCILE_SEC = 60.0
 DASH_HOST = os.environ.get(
     "DASH_HOST", "127.0.0.1"

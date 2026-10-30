@@ -50,6 +50,8 @@ WALLET = os.environ.get("POLYMARKET_WALLET_ADDRESS", "")
 MAX_USDC = float(os.environ.get("LIVE_MAX_USDC", "50"))
 MAX_LOSS = float(os.environ.get("MAX_LOSS_USDC", "15"))
 MAX_MARKETS = int(os.environ.get("MAX_MARKETS", "8"))
+# diversify: no market gets more than this share of capital (0 = let the optimiser concentrate)
+SPREAD_FRAC = float(os.environ.get("SPREAD_FRAC", "0.3"))
 POS_SEC = float(os.environ.get("POS_SEC", "5"))
 RECONCILE_SEC = 60.0
 DASH_HOST = os.environ.get(
@@ -570,7 +572,7 @@ class Executor:
             {
                 "type": "config",
                 "capital": MAX_USDC,
-                "params": {"maxMarkets": MAX_MARKETS},
+                "params": {"maxMarkets": MAX_MARKETS, "spreadFrac": SPREAD_FRAC},
             }
         )
         tasks = [

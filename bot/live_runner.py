@@ -649,9 +649,45 @@ def geocheck():
     )
 
 
+def config_problems():
+    """Format checks for live credentials (values are never printed)."""
+    import re
+
+    probs = []
+    key = os.environ.get("POLYMARKET_PRIVATE_KEY", "").strip()
+    if not re.fullmatch(r"(0x)?[0-9a-fA-F]{64}", key):
+        hint = " (looks like an API key — it has dashes)" if "-" in key else ""
+        probs.append(
+            f"POLYMARKET_PRIVATE_KEY is not a private key{hint}: expected 64 hex characters (0-9, a-f), optionally 0x-prefixed"
+        )
+    if WALLET and not re.fullmatch(r"0x[0-9a-fA-F]{40}", WALLET.strip()):
+        probs.append(
+            "POLYMARKET_WALLET_ADDRESS is not an address: expected 0x + 40 hex characters"
+        )
+    rk = os.environ.get("POLYMARKET_RELAYER_API_KEY", "").strip()
+    if rk and re.fullmatch(r"0x[0-9a-fA-F]{40}", rk):
+        probs.append(
+            "POLYMARKET_RELAYER_API_KEY holds an address — it should be the Relayer API key (the value with dashes)"
+        )
+    return probs
+
+
+def idle_on_config_error(probs):
+    """Never trade with bad credentials, and don't crash-loop: explain, then wait for a fixed env + restart."""
+    for p in probs:
+        log("CONFIG ERROR —", p)
+    log(
+        "not trading. Fix /etc/pm-desk/env (or set LIVE=0), then: systemctl restart pm-live"
+    )
+    while True:
+        time.sleep(3600)
+
+
 def main():
-    if LIVE and not os.environ.get("POLYMARKET_PRIVATE_KEY"):
-        sys.exit("LIVE=1 needs POLYMARKET_PRIVATE_KEY in the environment")
+    if LIVE:
+        probs = config_problems()
+        if probs:
+            idle_on_config_error(probs)
     if LIVE:
         try:
             ok, info = geocheck()

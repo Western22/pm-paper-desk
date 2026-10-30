@@ -460,6 +460,10 @@ class Executor:
                 asyncio.create_task(self.on_pull(m))  # never wait behind a sync
             elif ty == "orders":
                 for line_ in m.get("log", [])[-8:]:
+                    if (
+                        "] REQUOTE " in line_
+                    ):  # routine re-pricing: order changes show up as "sync" lines
+                        continue
                     log("  engine:", line_[:150])
                 asyncio.create_task(self.on_orders(m))
             elif ty == "info":

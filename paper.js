@@ -239,7 +239,8 @@ function step(ms, book, now, P, trades = null) {
   // replace hysteresis: Polymarket has no amend, so every replace goes to the back of the queue. Keep the resting
   // quote while it is no more aggressive than the new optimum, still scores ≥ (1 − replaceHyst) of it and sizes
   // are close; replace at once when it would be riskier.
-  if (q && keepResting(q, nq, mk, mid, P, free, longYes, longNo)) {
+  const identical = q && q.bid === nq.bid && q.ask === nq.ask && q.bs === nq.bs && q.as === nq.as && (q.mode || 'two') === nq.mode;
+  if (q && (identical || keepResting(q, nq, mk, mid, P, free, longYes, longNo))) {
     ms.status = best ? 'QUOTING' : 'UNWIND'; ms.edge = best ? best.edge * 1440 : 0; return ev;
   }
   nq.t = q && q.bid === nq.bid && q.ask === nq.ask && q.t ? q.t : now; // queue time: only trades after posting can fill

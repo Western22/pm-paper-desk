@@ -150,6 +150,7 @@ class Executor:
         self.resting = {}  # key → {"id", "market", "token"}
         self.pnl0 = None
         self.have_pos = False
+        self.blocked = None  # set when the exchange refuses this wallet → stop placing
         self.last_engine = time.time()
         self.lock = (
             asyncio.Lock()
@@ -257,6 +258,22 @@ class Executor:
                 }
             self.stats["placed"] += len(orders)
             return
+        try:
+            res = await self._send(orders)
+        except Exception as e:  # noqa: BLE001 — exchange said no: log it, never crash the loop
+            self.stats["rejected"] += len(orders)
+            msg = str(e)
+            log(f"REJECTED batch of {len(orders)}: {msg}")
+            if "deposit wallet" in msg or "maker address not allowed" in msg:
+                self.blocked = (
+                    "Polymarket refuses orders from this wallet. Set POLYMARKET_WALLET_ADDRESS to the address shown "
+                    "on your polymarket.com profile (your deposit wallet, where the $ sits), then: systemctl restart pm-live"
+                )
+                log("CONFIG ERROR —", self.blocked)
+            return
+        self._record(orders, res)
+
+    async def _send(self, orders):
         try:  # batch: sign locally, one request for up to 15
             signed = await asyncio.gather(
                 *[
@@ -288,6 +305,9 @@ class Executor:
                     for o in orders
                 ]
             )
+        return res
+
+    def _record(self, orders, res):
         for o, r in zip(orders, res):
             if getattr(r, "ok", False):
                 self.resting[key(o)] = {
@@ -405,7 +425,7 @@ class Executor:
         )
 
     async def on_orders(self, m):
-        if not self.have_pos:
+        if not self.have_pos or self.blocked:
             return
         orders = m["orders"]
         self.markets = m.get("markets") or self.markets

@@ -270,6 +270,12 @@ class Executor:
                     "on your polymarket.com profile (your deposit wallet, where the $ sits), then: systemctl restart pm-live"
                 )
                 log("CONFIG ERROR —", self.blocked)
+            elif "address of the API KEY" in msg:
+                self.blocked = (
+                    "the API key belongs to a different address than the signer. Comment out POLYMARKET_RELAYER_API_KEY "
+                    "and POLYMARKET_RELAYER_API_KEY_ADDRESS in /etc/pm-desk/env (the bot derives its own key), then restart"
+                )
+                log("CONFIG ERROR —", self.blocked)
             return
         self._record(orders, res)
 

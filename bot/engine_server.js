@@ -14,7 +14,17 @@ const readline = require('readline');
 const E = require(path.join(__dirname, '..', 'lib', 'paper-engine.js'));
 const Q = require(path.join(__dirname, '..', 'engine.js'));
 const Core = require(path.join(__dirname, '..', 'paper.js'));
-const { ordersFor, exitOnly } = require(path.join(__dirname, 'decide.js'));
+const { ordersFor, exitOnly, takeProfit } = require(path.join(__dirname, 'decide.js'));
+let winners = new Map(); const tpLogged = new Map();
+/** Best bid for a token from the live books (NO token: its own book, else 1 − best YES ask). */
+function bestBid(tok) {
+  const b = books.get(tok);
+  if (b && Date.now() - b.at < BOOK_STALE_MS) { const p = [...b.bids].filter(([, z]) => z > 0).map(([x]) => x); if (p.length) return Math.max(...p); }
+  const id = anyIdx.get(tok), ms = id && s.markets[id]; if (!ms) return 0;
+  const yb = books.get(String(ms.meta.tokens[0].id));
+  if (String(ms.meta.tokens[1].id) === tok && yb && Date.now() - yb.at < BOOK_STALE_MS) { const a = [...yb.asks].filter(([, z]) => z > 0).map(([x]) => x); if (a.length) return +(1 - Math.min(...a)).toFixed(4); }
+  return 0;
+}
 
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const TICK_MS = +(process.env.TICK_MS || 5000);      // requote cadence (engine EWMAs are scaled to this)
@@ -141,6 +151,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (m.type === 'positions') {
     pos = m.pos || {}; posAt = Date.now();
     if (m.losers) E.markLosers(s, m.losers, posAt);
+    winners = new Map((m.winners || []).map(w => [String(w.asset), +w.avg]));
     if (m.kick) kick(); // kick: a fill just happened
   }
   if (m.type === 'config') {
@@ -169,7 +180,12 @@ async function tick() {
     if (posAt) for (const [id, ms] of Object.entries(s.markets)) {
       const [yes, no] = ms.meta.tokens.map(t => String(t.id));
       const yesHeld = +pos[yes] || 0, noHeld = +pos[no] || 0;
-      const o = exitOnly(s, id, ms, ordersFor(ms, yesHeld, noHeld), yesHeld, noHeld);
+      let o = exitOnly(s, id, ms, ordersFor(ms, yesHeld, noHeld), yesHeld, noHeld);
+      o = takeProfit(ms, o, { [yes]: yesHeld, [no]: noHeld }, winners, bestBid);
+      for (const x of o) if (x.taker && Date.now() - (tpLogged.get(x.token) || 0) > 300000) {
+        tpLogged.set(x.token, Date.now());
+        E.log(s, `[${ms.meta.question.slice(0, 28)}] TAKE PROFIT — selling ${x.size} @ ${x.price} now (cost ${winners.get(x.token)})`, 'q');
+      }
       orders.push(...o);
     }
     const markets = Object.values(s.markets).map(ms => ({ id: ms.meta.id, q: ms.meta.question.slice(0, 60), status: ms.status, inv: ms.inv, mid: ms.lastMid, ws: !!getBook(ms), tokens: ms.meta.tokens.map(t => String(t.id)) }));

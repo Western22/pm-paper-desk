@@ -60,6 +60,13 @@ async def main():
         "restart keeps counting from the saved start"
     )
     print("baseline ok")
+    rows = [
+        {"asset": "gem", "pnl": 3.2, "avg": 0.24, "cur": 0.40},
+        {"asset": "tiny", "pnl": 0.4, "avg": 0.20, "cur": 0.30},  # +50 % but only $0.40
+        {"asset": "flat", "pnl": 1.5, "avg": 0.50, "cur": 0.52},  # $1.50 but only +4 %
+    ]
+    assert lr.winners(rows) == [{"asset": "gem", "avg": 0.24}], lr.winners(rows)
+    print("winners ok")
 
 
 asyncio.run(main())

@@ -147,6 +147,19 @@ def losers(rows, usd=1.0, frac=0.15):
     ]
 
 
+TP_USD = float(os.environ.get("TAKE_PROFIT_USD", "1"))
+TP_FRAC = float(os.environ.get("TAKE_PROFIT_FRAC", "0.15"))
+
+
+def winners(rows, usd=TP_USD, frac=TP_FRAC):
+    """Held positions up ≥ $usd AND ≥ frac above cost → [{asset, avg}] for a quick take-profit exit."""
+    return [
+        {"asset": r["asset"], "avg": r["avg"]}
+        for r in rows
+        if r["avg"] > 0 and r["pnl"] >= usd and r["cur"] / r["avg"] - 1 >= frac
+    ]
+
+
 def key(o):
     return (
         str(o["token"]),
@@ -332,7 +345,9 @@ class Executor:
                         side=o["side"],
                         price=f"{o['price']:.3f}",
                         size=f"{o['size']}",
-                        post_only=True,
+                        post_only=not o.get(
+                            "taker"
+                        ),  # take-profit exits cross the spread
                     )
                     for o in orders
                 ]
@@ -350,7 +365,9 @@ class Executor:
                         side=o["side"],
                         price=f"{o['price']:.3f}",
                         size=f"{o['size']}",
-                        post_only=True,
+                        post_only=not o.get(
+                            "taker"
+                        ),  # take-profit exits cross the spread
                     )
                     for o in orders
                 ]
@@ -580,6 +597,7 @@ class Executor:
                         "type": "positions",
                         "pos": self.pos,
                         "losers": losers(POSITION_ROWS),
+                        "winners": winners(POSITION_ROWS),
                     }
                 )
                 self.have_pos = True

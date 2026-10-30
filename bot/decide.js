@@ -49,6 +49,20 @@ function exitOnly(s, id, ms, orders, yesHeld, noHeld, E = require(path.join(__di
   return out;
 }
 
+/** Take profit: a held token the executor reports as up ≥ $1 and ≥15 % (`winners`: token → avg cost) is sold
+ *  NOW at the best bid — a marketable order (taker: true), not a resting ask — as long as that bid still keeps
+ *  ≥ `keep` (5 %) over cost. Buys of that token are dropped so the exit isn't immediately undone. */
+function takeProfit(ms, orders, held, winners, bestBid, keep = 0.05) {
+  let out = orders;
+  for (const t of ms.meta.tokens.map(x => String(x.id))) {
+    const avg = winners && winners.get(t), n = Math.floor(held[t] || 0), bid = bestBid(t);
+    if (!avg || n < MIN_ORDER || !(bid > 0) || bid < avg * (1 + keep)) continue;
+    out = out.filter(o => o.token !== t);
+    out.push({ market: ms.meta.id, question: ms.meta.question, token: t, side: 'SELL', price: +bid.toFixed(4), size: n, leg: 'take-profit', taker: true });
+  }
+  return out;
+}
+
 async function main() {
   const statePath = process.argv[2] || 'live-state.json';
   const input = readStdin();
@@ -79,4 +93,4 @@ async function main() {
 }
 if (require.main === module) main().catch(e => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) }) + '\n'); process.exit(1); });
 
-module.exports = { ordersFor, exitOnly };
+module.exports = { ordersFor, exitOnly, takeProfit };

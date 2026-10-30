@@ -48,3 +48,19 @@ s2.markets.X = P.newMarketState(mk('X', 'q1', 'ev'), model, now, 20); s2.markets
 E.siblingPull(s2, 'X', now, 'toxic');
 assert(s2.markets.Y.coolUntil <= now + 11 * 60000 && !s2.eventCool);
 console.log('guards ok');
+
+// 5) take profit: 20 YES bought @0.24, bid now 0.40 → sell all 20 @0.40 as a taker, drop YES buys/asks
+{
+  const { takeProfit } = require('../bot/decide.js');
+  const ms = P.newMarketState(mk('T', 'Will BTC close above $150k?', 'btc2'), model, now, 20);
+  const orders = [{ token: 'TY', side: 'BUY', price: 0.38, size: 20 }, { token: 'TY', side: 'SELL', price: 0.43, size: 20 }, { token: 'TN', side: 'BUY', price: 0.57, size: 20 }];
+  const win = new Map([['TY', 0.24]]);
+  const o = takeProfit(ms, orders, { TY: 20, TN: 0 }, win, t => (t === 'TY' ? 0.4 : 0.55));
+  assert.deepStrictEqual(o.map(x => [x.token, x.side, x.price, x.size, !!x.taker]), [['TN', 'BUY', 0.57, 20, false], ['TY', 'SELL', 0.4, 20, true]], JSON.stringify(o));
+  // bid fell back to ~cost: no fire-sale, orders unchanged
+  assert.strictEqual(takeProfit(ms, orders, { TY: 20 }, win, () => 0.245), orders);
+  // not a winner / nothing held → unchanged
+  assert.strictEqual(takeProfit(ms, orders, { TY: 20 }, new Map(), () => 0.4), orders);
+  assert.strictEqual(takeProfit(ms, orders, { TY: 2 }, win, () => 0.4), orders);
+  console.log('take profit ok');
+}

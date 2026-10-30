@@ -8,3 +8,4 @@ __pycache__/
 *.pyc
 analysis/favorite_backtest.json
 analysis/favorite_backtest.log
+analysis/favorite_backtest.txt

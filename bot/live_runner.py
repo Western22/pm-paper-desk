@@ -114,6 +114,29 @@ def fetch_positions():
     return pos, pnl
 
 
+def loss_baseline(pnl, path=None):
+    """Starting P&L for the loss limit, saved to disk on first use so restarts don't reset the limit.
+    Delete the file (or set a new MAX_LOSS_USDC) to start counting afresh."""
+    p = Path(
+        path
+        or os.environ.get("LOSS_BASELINE_FILE", STATE.parent / "loss-baseline.json")
+    )
+    try:
+        return float(json.loads(p.read_text())["pnl0"])
+    except (OSError, ValueError, KeyError, TypeError):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            json.dumps(
+                {
+                    "pnl0": pnl,
+                    "since": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
+                }
+            )
+        )
+        log(f"loss limit: counting from P&L {pnl:+.2f} (saved to {p})")
+        return pnl
+
+
 def losers(rows, usd=1.0, frac=0.15):
     """Assets whose held position is losing: ≥ $usd down, or price ≥ frac below cost (and ≥ $0.30 down)."""
     return [
@@ -541,7 +564,7 @@ class Executor:
             try:
                 pos, pnl = await asyncio.to_thread(fetch_positions)
                 if self.pnl0 is None:
-                    self.pnl0 = pnl
+                    self.pnl0 = loss_baseline(pnl)
                 self.pnl = pnl - self.pnl0
                 if pnl - self.pnl0 < -MAX_LOSS:
                     await self.cancel_all(

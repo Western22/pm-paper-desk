@@ -52,6 +52,14 @@ async def main():
     ]
     assert lr.losers(rows) == ["ben", "oil"], lr.losers(rows)
     print("losers ok")
+    import tempfile
+
+    f = pathlib.Path(tempfile.mkdtemp()) / "b.json"
+    assert lr.loss_baseline(-1.5, f) == -1.5, "first run saves the start"
+    assert lr.loss_baseline(-9.0, f) == -1.5, (
+        "restart keeps counting from the saved start"
+    )
+    print("baseline ok")
 
 
 asyncio.run(main())

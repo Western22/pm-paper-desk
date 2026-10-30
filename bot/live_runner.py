@@ -185,6 +185,16 @@ class Executor:
         kw = {"private_key": os.environ["POLYMARKET_PRIVATE_KEY"]}
         if WALLET:
             kw["wallet"] = WALLET
+        # optional Relayer API key (polymarket.com → Settings → API Keys → Relayer API Keys): enables gasless
+        # wallet operations such as trading approvals; order signing itself only needs the signer key
+        rk, ra = (
+            os.environ.get("POLYMARKET_RELAYER_API_KEY"),
+            os.environ.get("POLYMARKET_RELAYER_API_KEY_ADDRESS"),
+        )
+        if rk and ra:
+            from polymarket import RelayerApiKey
+
+            kw["api_key"] = RelayerApiKey(key=rk, address=ra)
         self.client = await AsyncSecureClient.create(**kw)
         log("connected · wallet type", getattr(self.client, "wallet_type", "?"))
         await self.reconcile()

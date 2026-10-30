@@ -44,6 +44,14 @@ async def main():
     await ex.on_orders({"orders": [o]})
     assert Client.calls == 1, "no more orders sent once blocked"
     print("reject ok")
+    rows = [
+        {"asset": "ben", "pnl": -5.5, "avg": 0.48, "cur": 0.205},
+        {"asset": "oil", "pnl": -0.4, "avg": 0.14, "cur": 0.115},  # −18 %, −$0.40
+        {"asset": "ok", "pnl": -0.2, "avg": 0.30, "cur": 0.29},
+        {"asset": "up", "pnl": 2.0, "avg": 0.30, "cur": 0.40},
+    ]
+    assert lr.losers(rows) == ["ben", "oil"], lr.losers(rows)
+    print("losers ok")
 
 
 asyncio.run(main())

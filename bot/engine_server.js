@@ -14,7 +14,7 @@ const readline = require('readline');
 const E = require(path.join(__dirname, '..', 'lib', 'paper-engine.js'));
 const Q = require(path.join(__dirname, '..', 'engine.js'));
 const Core = require(path.join(__dirname, '..', 'paper.js'));
-const { ordersFor } = require(path.join(__dirname, 'decide.js'));
+const { ordersFor, exitOnly } = require(path.join(__dirname, 'decide.js'));
 
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const TICK_MS = +(process.env.TICK_MS || 5000);      // requote cadence (engine EWMAs are scaled to this)
@@ -38,13 +38,15 @@ let tokenIdx = byToken(), anyIdx = byAnyToken();
 const MIN_REQUOTE_MS = +(process.env.MIN_REQUOTE_MS || 1000); // event-driven requotes, at most once per second
 
 /** Pull one market now (and its same-event siblings): executor cancels on receipt; engine stays out until coolUntil. */
-function pull(id, reason, coolMin) {
+function pull(id, reason, coolMin, big = false) {
   const ms = s.markets[id]; if (!ms) return;
   const now = Date.now();
+  // a big jump is news: the market and its whole event stay out for hours, not minutes
+  if (big) coolMin = Math.max(coolMin, s.P.eventCoolMin ?? 360);
   out({ type: 'pull', market: id, tokens: ms.meta.tokens.map(t => String(t.id)), reason });
   ms.quote = null; ms.status = 'GATED'; ms.coolUntil = Math.max(ms.coolUntil || 0, now + coolMin * 60000);
-  E.log(s, `[${ms.meta.question.slice(0, 28)}] PULL — ${reason}`, 'g');
-  for (const sib of E.siblingPull(s, id, now, reason)) {
+  E.log(s, `[${ms.meta.question.slice(0, 28)}] PULL — ${reason}${big ? ` · event out for ${Math.round(coolMin / 60)} h` : ''}`, 'g');
+  for (const sib of E.siblingPull(s, id, now, reason, big ? coolMin : undefined)) {
     out({ type: 'pull', market: sib, tokens: s.markets[sib].meta.tokens.map(t => String(t.id)), reason: `sibling: ${reason}` });
   }
 }
@@ -75,7 +77,8 @@ function dangerCheck(tok) {
   const mid = comp.mid, move = Math.abs(mid - ms.lastMid) * 100;
   const lim = Math.max(1.5, 0.4 * ms.meta.v); // same jump threshold as the engine's shock gate
   const crossed = (ms.quote.bs > 0 && ba <= ms.quote.bid - 1e-9) || (ms.quote.as > 0 && bb >= ms.quote.ask + 1e-9);
-  if (move >= lim || crossed) pull(id, crossed ? 'book crossed our quote' : `mid jumped ${move.toFixed(1)}¢`, s.P.cooldownMin || 20);
+  const big = crossed || move >= (s.P.bigJumpC ?? 4);
+  if (move >= lim || crossed) pull(id, crossed ? 'book crossed our quote' : `mid jumped ${move.toFixed(1)}¢`, s.P.cooldownMin || 20, big);
   else kick(); // a competitor changed the book: re-optimise our quote now (hysteresis keeps queue if not worth it)
 }
 
@@ -135,7 +138,11 @@ setInterval(() => { if (ws && ws.readyState === 1) ws.send('PING'); }, 10000);
 // ---------------------------------------------------------------- inputs from the executor
 readline.createInterface({ input: process.stdin }).on('line', line => {
   let m; try { m = JSON.parse(line); } catch (e) { return; }
-  if (m.type === 'positions') { pos = m.pos || {}; posAt = Date.now(); if (m.kick) kick(); } // kick: a fill just happened
+  if (m.type === 'positions') {
+    pos = m.pos || {}; posAt = Date.now();
+    if (m.losers) E.markLosers(s, m.losers, posAt);
+    if (m.kick) kick(); // kick: a fill just happened
+  }
   if (m.type === 'config') {
     if (m.capital) {
       if (+m.capital > (s.P.capital || 0) + 1) s.lastRebalance = 0; // raised cap → allocate the new money now
@@ -159,9 +166,11 @@ async function tick() {
     resubscribe();
     const orders = [];
     // no orders until the executor has reported real positions (never quote blind on inventory)
-    if (posAt) for (const ms of Object.values(s.markets)) {
+    if (posAt) for (const [id, ms] of Object.entries(s.markets)) {
       const [yes, no] = ms.meta.tokens.map(t => String(t.id));
-      orders.push(...ordersFor(ms, +pos[yes] || 0, +pos[no] || 0));
+      const yesHeld = +pos[yes] || 0, noHeld = +pos[no] || 0;
+      const o = exitOnly(s, id, ms, ordersFor(ms, yesHeld, noHeld), yesHeld, noHeld);
+      orders.push(...o);
     }
     const markets = Object.values(s.markets).map(ms => ({ id: ms.meta.id, q: ms.meta.question.slice(0, 60), status: ms.status, inv: ms.inv, mid: ms.lastMid, ws: !!getBook(ms), tokens: ms.meta.tokens.map(t => String(t.id)) }));
     out({ type: 'orders', orders, markets, log: s.log.slice(Math.min(logStart, s.log.length)).map(l => l.t), engineMs: Date.now() - t0 });

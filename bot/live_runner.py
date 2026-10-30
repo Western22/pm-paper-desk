@@ -114,6 +114,16 @@ def fetch_positions():
     return pos, pnl
 
 
+def losers(rows, usd=1.0, frac=0.15):
+    """Assets whose held position is losing: ≥ $usd down, or price ≥ frac below cost (and ≥ $0.30 down)."""
+    return [
+        r["asset"]
+        for r in rows
+        if r["pnl"] <= -usd
+        or (r["avg"] > 0 and r["cur"] / r["avg"] - 1 <= -frac and r["pnl"] <= -0.3)
+    ]
+
+
 def key(o):
     return (
         str(o["token"]),
@@ -542,7 +552,13 @@ class Executor:
                 # the data-api lags the matching engine: while fills are fresh, the streamed inventory wins
                 if time.time() - self.last_fill > 60 or not self.have_pos:
                     self.pos = pos
-                await self.send({"type": "positions", "pos": self.pos})
+                await self.send(
+                    {
+                        "type": "positions",
+                        "pos": self.pos,
+                        "losers": losers(POSITION_ROWS),
+                    }
+                )
                 self.have_pos = True
             except Exception as e:  # noqa: BLE001 — positions are retried; orders wait until we have them
                 log("[positions]", e)

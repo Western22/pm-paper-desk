@@ -34,6 +34,21 @@ function ordersFor(ms, yesHeld, noHeld) {
   return out;
 }
 
+/** Exit-only markets (loss cool-down / headline): drop every BUY, keep offering held shares back. If the quote
+ *  had no sell leg, offer held shares at the quote's ask (YES) / 1 − bid (NO). A flat exit-only market is closed. */
+function exitOnly(s, id, ms, orders, yesHeld, noHeld, E = require(path.join(__dirname, '..', 'lib', 'paper-engine.js'))) {
+  const why = E.exitOnlyReason(s, ms);
+  if (!why) return orders;
+  const out = orders.filter(o => o.side === 'SELL');
+  const [yes, no] = ms.meta.tokens.map(t => String(t.id));
+  const q = ms.quote;
+  if (q && yesHeld >= MIN_ORDER && !out.some(o => o.token === yes)) out.push({ market: ms.meta.id, question: ms.meta.question, token: yes, side: 'SELL', price: +q.ask.toFixed(4), size: Math.floor(yesHeld), leg: 'exit' });
+  if (q && noHeld >= MIN_ORDER && !out.some(o => o.token === no)) out.push({ market: ms.meta.id, question: ms.meta.question, token: no, side: 'SELL', price: +(1 - q.bid).toFixed(4), size: Math.floor(noHeld), leg: 'exit' });
+  if (ms.status !== 'GATED') ms.status = 'EXIT ONLY';
+  if (yesHeld < MIN_ORDER && noHeld < MIN_ORDER) E.closeMarket(s, id, why);
+  return out;
+}
+
 async function main() {
   const statePath = process.argv[2] || 'live-state.json';
   const input = readStdin();
@@ -64,4 +79,4 @@ async function main() {
 }
 if (require.main === module) main().catch(e => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) }) + '\n'); process.exit(1); });
 
-module.exports = { ordersFor };
+module.exports = { ordersFor, exitOnly };

@@ -198,6 +198,14 @@ class Executor:
             kw["api_key"] = RelayerApiKey(key=rk, address=ra)
         self.client = await AsyncSecureClient.create(**kw)
         log("connected · wallet type", getattr(self.client, "wallet_type", "?"))
+        # public addresses only — lets you match them against your polymarket.com profile
+        log(
+            "  signer",
+            getattr(self.client, "signer", "?"),
+            "· trading wallet",
+            getattr(self.client, "wallet", None)
+            or getattr(self.client, "address", "?"),
+        )
         await self.reconcile()
 
     async def heartbeat(self):

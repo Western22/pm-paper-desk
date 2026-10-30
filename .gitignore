@@ -6,3 +6,5 @@ node_modules/
 bot/run/
 __pycache__/
 *.pyc
+analysis/favorite_backtest.json
+analysis/favorite_backtest.log

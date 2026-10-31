@@ -11,8 +11,11 @@ const now = Date.now();
 // 1) headline filter: the three markets that lost are all caught; ordinary ones are not
 for (const q of ["Major airlines suspend Ben Gurion flights by January 31, 2027?", "Brazil's top courts strike down oil export tax by June 30, 2027?", 'Will Gemini Carbon be released on November 10, 2026?'])
   assert(E.isHeadline(q), q);
-for (const q of ['Will BTC close above $120k on Dec 31?', 'Will the Fed cut rates in December?', 'Lakers vs Celtics: who wins?'])
+for (const q of ['Will BTC close above $120k on Dec 31?', 'Lakers vs Celtics: who wins?', 'Will ETH reach $5,000 in November?'])
   assert(!E.isHeadline(q), q);
+// scheduled decisions gap at a known time (the ECB market lost 16¢ on 30 Oct)
+for (const q of ['Will the ECB make no change to the deposit facility rate at the February meeting?', 'Will the Fed cut rates in December?'])
+  assert(E.isHeadline(q), q);
 
 // 2) loss cool-down: losing YES → only SELLs survive, held shares still offered, blacklisted for 24 h
 const s = E.freshState(68); s.P.live = true; s.P.headlineFilter = 0;
@@ -63,4 +66,33 @@ console.log('guards ok');
   assert.strictEqual(takeProfit(ms, orders, { TY: 20 }, new Map(), () => 0.4), orders);
   assert.strictEqual(takeProfit(ms, orders, { TY: 2 }, win, () => 0.4), orders);
   console.log('take profit ok');
+}
+
+// 6) fill-cost calibration: bought NO @0.40, YES mid 60 min later 0.76 → NO worth 0.24 → 16¢ adverse
+{
+  const s = E.freshState(68); s.P.live = true; s.P.liveMarkoutC = 9;
+  s.markets.M = P.newMarketState(mk('M', 'Will BTC close above $160k?', 'btc3'), model, now, 20);
+  E.recordFill(s, { asset: 'MN', side: 'BUY', price: 0.40, size: 20 }, now);
+  E.recordFill(s, { asset: 'zz', side: 'BUY', price: 0.5, size: 5 }, now); // not ours → ignored
+  assert.strictEqual(s.fills.length, 1);
+  s.markets.M.lastMid = 0.76;
+  E.scoreFills(s, now + 30 * 60000); assert(!s.fills[0].done, 'waits 60 min');
+  E.scoreFills(s, now + 61 * 60000);
+  assert.strictEqual(s.fills[0].markoutC, 16);
+  assert.strictEqual(s.P.liveMarkoutC, 10.4, '0.8·9 + 0.2·16');
+  // a favourable fill pulls the estimate down, never below 1¢
+  E.recordFill(s, { asset: 'MY', side: 'BUY', price: 0.20, size: 20 }, now); // YES bought 0.20, mid now 0.76 → −56¢
+  E.scoreFills(s, now + 62 * 60000);
+  assert(s.P.liveMarkoutC === 1, String(s.P.liveMarkoutC));
+  // floor applied to the model, own higher value kept, paper untouched
+  const m1 = E.applyMarkout({ markout: 0.3 }, { live: true, liveMarkoutC: 9 }); assert.strictEqual(m1.markout, 9);
+  assert.strictEqual(E.applyMarkout(m1, { live: true, liveMarkoutC: 4 }).markout, 4, 'tracks the live value down to the model base');
+  assert.strictEqual(E.applyMarkout({ markout: 12 }, { live: true, liveMarkoutC: 9 }).markout, 12);
+  assert.strictEqual(E.applyMarkout({ markout: 0.3 }, { live: false, liveMarkoutC: 9 }).markout, 0.3);
+  // the quote itself moves away from mid as fills get costlier
+  const meta = mk('Q', 'Will BTC close above $170k?', 'btc4');
+  const q0 = P.optimalQuote(meta, 40, 0.3, 0.3, 20, Object.assign({}, model, { markout: 0.3 }), 0, { allowOneSided: true });
+  const q9 = P.optimalQuote(meta, 40, 0.3, 0.3, 20, Object.assign({}, model, { markout: 9 }), 0, { allowOneSided: true });
+  assert(!q9 || q9.d > q0.d || q9.costDay > q0.costDay, `wider or costlier: ${JSON.stringify({ q0, q9 })}`);
+  console.log('markout calibration ok');
 }

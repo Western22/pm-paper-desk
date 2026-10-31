@@ -37,6 +37,8 @@ const info = msg => out({ type: 'info', msg });
 let s;
 try { s = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (e) { s = E.freshState(50); s.running = true; s.startedAt = Date.now(); }
 s.P.live = true;
+// fill cost to plan with until live fills recalibrate it: 30 Oct real fills averaged ~9¢/share adverse
+if (s.P.liveMarkoutC == null) s.P.liveMarkoutC = +(process.env.LIVE_MARKOUT_C || 9);
 s.P.tickSec = TICK_MS / 1000;
 let pos = {}, posAt = 0;
 
@@ -154,6 +156,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     winners = new Map((m.winners || []).map(w => [String(w.asset), +w.avg]));
     if (m.kick) kick(); // kick: a fill just happened
   }
+  if (m.type === 'fill') E.recordFill(s, m, Date.now());
   if (m.type === 'config') {
     if (m.capital) {
       if (+m.capital > (s.P.capital || 0) + 1) s.lastRebalance = 0; // raised cap → allocate the new money now

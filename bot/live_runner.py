@@ -442,6 +442,17 @@ class Executor:
             ):
                 self.seen_fills.add(tag)
                 hit = True
+                # engine measures the adverse move after each fill to calibrate the fill cost it plans with
+                with contextlib.suppress(TypeError, ValueError):
+                    await self.send(
+                        {
+                            "type": "fill",
+                            "asset": str(_attr(mo, "asset_id")),
+                            "side": str(_attr(mo, "side", default="")).upper(),
+                            "price": float(_attr(mo, "price")),
+                            "size": float(amt),
+                        }
+                    )
                 log(
                     f"FILL {_attr(mo, 'side')} {float(amt):.0f} @ {_attr(mo, 'price')} · asset …{str(_attr(mo, 'asset_id'))[-6:]}"
                 )

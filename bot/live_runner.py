@@ -205,6 +205,28 @@ def compound_cap(total, current, buffer=2.0):
     return round(max(5.0, min(COMPOUND_MAX, total - buffer)), 2)
 
 
+def cash_call_variants(known=None):
+    """Keyword sets to try on a balance call, the one that worked last time first."""
+    out = [known] if known is not None else []
+    enum = None
+    with contextlib.suppress(Exception):
+        import polymarket
+
+        at = getattr(polymarket, "AssetType", None)
+        enum = getattr(at, "COLLATERAL", None) if at else None
+    for kw in (
+        {},
+        {"asset_type": "COLLATERAL"},
+        {"asset_type": enum} if enum is not None else None,
+        {"asset_type": "collateral"},
+        {"asset": "COLLATERAL"},
+        {"params": {"asset_type": "COLLATERAL"}},
+    ):
+        if kw is not None and kw not in out:
+            out.append(kw)
+    return out
+
+
 def parse_cash(r):
     """Collateral balance from whatever the SDK returns (number, object or dict; base units → dollars)."""
     for v in (
@@ -881,16 +903,26 @@ class Executor:
             fn = getattr(self.client, n, None)
             if not callable(fn):
                 continue
-            try:
-                r = fn()
-                if asyncio.iscoroutine(r):
-                    r = await r
-                x = parse_cash(r)
-            except Exception:  # noqa: BLE001, S112 — wrong signature for this SDK: try the next name
-                continue
+            # get_balance_allowance needs to be told which asset: try the usual spellings (and the SDK's enum)
+            x, errs = None, []
+            for kw in cash_call_variants(getattr(self, "_cash_kw", None)):
+                try:
+                    r = fn(**kw)
+                    if asyncio.iscoroutine(r):
+                        r = await r
+                    x = parse_cash(r)
+                except Exception as e:  # noqa: BLE001 — wrong signature: try the next spelling
+                    errs.append(f"{kw}: {type(e).__name__} {e}"[:160])
+                    continue
+                if x is not None:
+                    self._cash_kw = kw
+                    break
+            if x is None and errs and not getattr(self, "_cash_errs_logged", False):
+                self._cash_errs_logged = True
+                log(f"[account] client.{n} tried: " + " | ".join(errs[:4]))
             if x is not None:
                 if getattr(self, "_cash_fn", None) != n:
-                    log(f"[account] cash balance via client.{n}()")
+                    log(f"[account] cash balance via client.{n}({self._cash_kw or ''})")
                 self._cash_fn = n
                 return x
         if not getattr(self, "_cash_warned", False):

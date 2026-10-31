@@ -152,6 +152,28 @@ async def main():
     )
     print("executor take-profit ok")
 
+    # cash via get_balance_allowance(asset_type=...) — the call the live SDK has
+    class Bal:
+        balance = "56090000"
+
+    class Client:
+        async def get_balance_allowance(self, asset_type):
+            assert asset_type in ("COLLATERAL",), asset_type
+            return Bal()
+
+    lr.LIVE = True
+    ex6 = lr.Executor()
+    ex6.client = Client()
+    try:
+        assert await ex6.cash() == 56.09
+        assert ex6._cash_fn == "get_balance_allowance" and ex6._cash_kw == {
+            "asset_type": "COLLATERAL"
+        }
+        assert await ex6.cash() == 56.09, "second call reuses the working spelling"
+    finally:
+        lr.LIVE = False
+    print("cash balance ok")
+
     # compounding cap follows the account value minus $2, within [5, COMPOUND_MAX]
     assert lr.compound_cap(59.8, 52) == 57.8
     assert lr.compound_cap(3.0, 52) == 5.0

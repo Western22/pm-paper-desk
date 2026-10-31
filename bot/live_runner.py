@@ -544,6 +544,22 @@ class Executor:
                 log(
                     f"FILL {_attr(mo, 'side')} {float(amt):.0f} @ {_attr(mo, 'price')} · asset …{str(_attr(mo, 'asset_id'))[-6:]}"
                 )
+        # our own marketable orders (take-profit / sell-immediately) fill as the TAKER: track those too, or the
+        # engine keeps trying to sell shares that are already gone until the data-api catches up
+        tid = _attr(p, "taker_order_id", default=None)
+        if tid:
+            tag = (str(_attr(p, "id")), str(tid))
+            if tag not in self.seen_fills and self.apply_fill(
+                tid,
+                _attr(p, "asset_id"),
+                str(_attr(p, "side", default="")),
+                _attr(p, "size", default=0),
+            ):
+                self.seen_fills.add(tag)
+                hit = True
+                log(
+                    f"FILL (taker) {_attr(p, 'side')} {float(_attr(p, 'size', default=0)):.0f} @ {_attr(p, 'price')} · asset …{str(_attr(p, 'asset_id'))[-6:]}"
+                )
         if hit:
             t0 = time.time()
             await self.send(

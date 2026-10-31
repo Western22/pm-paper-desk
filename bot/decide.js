@@ -68,6 +68,21 @@ function takeProfit(ms, orders, held, winners, bestBid, minC = +(process.env.TAK
   return out;
 }
 
+/** Sell-immediately: rewards come from RESTING orders, not from holding shares, and every fill so far drifted
+ *  10–27¢ against us within hours. So shares bought by a fill (`flat`: token → fill info, set by the engine on a
+ *  BUY fill) are sold at once to the live best bid (taker), and that token's buys are dropped until it's flat.
+ *  Cost: the spread (~1–3¢/share) instead of the drift. */
+function flattenOrders(ms, orders, held, flat, bestBid) {
+  let out = orders;
+  for (const t of ms.meta.tokens.map(x => String(x.id))) {
+    const n = Math.floor(held[t] || 0), bid = bestBid(t);
+    if (!flat || !flat.has(t) || n < MIN_ORDER || !(bid > 0)) continue;
+    out = out.filter(o => o.token !== t);
+    out.push({ market: ms.meta.id, question: ms.meta.question, token: t, side: 'SELL', price: +bid.toFixed(4), size: n, leg: 'flatten', taker: true });
+  }
+  return out;
+}
+
 async function main() {
   const statePath = process.argv[2] || 'live-state.json';
   const input = readStdin();
@@ -98,4 +113,4 @@ async function main() {
 }
 if (require.main === module) main().catch(e => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) }) + '\n'); process.exit(1); });
 
-module.exports = { ordersFor, exitOnly, takeProfit };
+module.exports = { ordersFor, exitOnly, takeProfit, flattenOrders };

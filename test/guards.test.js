@@ -105,3 +105,18 @@ console.log('guards ok');
   assert(!q9 || q9.d > q0.d || q9.costDay > q0.costDay, `wider or costlier: ${JSON.stringify({ q0, q9 })}`);
   console.log('markout calibration ok');
 }
+
+// 7) sell-immediately: a BUY fill gave us 21 NO → sell all 21 at the best bid now, no NO buys meanwhile
+{
+  const { flattenOrders } = require('../bot/decide.js');
+  const ms = P.newMarketState(mk('F', 'Will BTC close above $180k?', 'btc5'), model, now, 20);
+  const orders = [{ token: 'FN', side: 'BUY', price: 0.45, size: 20 }, { token: 'FN', side: 'SELL', price: 0.48, size: 21 }, { token: 'FY', side: 'BUY', price: 0.52, size: 20 }];
+  const flat = new Map([['FN', { price: 0.46, at: now }]]);
+  const o = flattenOrders(ms, orders, { FN: 21, FY: 0 }, flat, t => (t === 'FN' ? 0.44 : 0.53));
+  assert.deepStrictEqual(o.map(x => [x.token, x.side, x.price, x.size, !!x.taker]), [['FY', 'BUY', 0.52, 20, false], ['FN', 'SELL', 0.44, 21, true]], JSON.stringify(o));
+  // nothing flagged / nothing held / no bid → untouched
+  assert.strictEqual(flattenOrders(ms, orders, { FN: 21 }, new Map(), () => 0.44), orders);
+  assert.strictEqual(flattenOrders(ms, orders, { FN: 2 }, flat, () => 0.44), orders);
+  assert.strictEqual(flattenOrders(ms, orders, { FN: 21 }, flat, () => 0), orders);
+  console.log('sell-immediately ok');
+}

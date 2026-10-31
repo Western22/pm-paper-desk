@@ -14,8 +14,12 @@ const readline = require('readline');
 const E = require(path.join(__dirname, '..', 'lib', 'paper-engine.js'));
 const Q = require(path.join(__dirname, '..', 'engine.js'));
 const Core = require(path.join(__dirname, '..', 'paper.js'));
-const { ordersFor, exitOnly, takeProfit } = require(path.join(__dirname, 'decide.js'));
+const { ordersFor, exitOnly, takeProfit, flattenOrders } = require(path.join(__dirname, 'decide.js'));
 let winners = new Map(); const tpLogged = new Map();
+// sell-immediately: token → { price, at } for shares a BUY fill just gave us (FLATTEN=0 turns it off)
+const FLATTEN = process.env.FLATTEN !== '0';
+const flat = new Map();
+const FLAT_COOL_MIN = +(process.env.FLATTEN_COOL_MIN || 5); // after flattening, the market sits out (flow is toxic now)
 /** Best bid for a token from the live books (NO token: its own book, else 1 − best YES ask). */
 function bestBid(tok) {
   const b = books.get(tok);
@@ -156,7 +160,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     winners = new Map((m.winners || []).map(w => [String(w.asset), +w.avg]));
     if (m.kick) kick(); // kick: a fill just happened
   }
-  if (m.type === 'fill') E.recordFill(s, m, Date.now());
+  if (m.type === 'fill') {
+    E.recordFill(s, m, Date.now());
+    if (FLATTEN && String(m.side).toUpperCase() === 'BUY') { flat.set(String(m.asset), { price: +m.price, at: Date.now() }); kick(); }
+  }
   if (m.type === 'config') {
     if (m.capital) {
       if (+m.capital > (s.P.capital || 0) + 1) s.lastRebalance = 0; // raised cap → allocate the new money now
@@ -185,6 +192,21 @@ async function tick() {
       const yesHeld = +pos[yes] || 0, noHeld = +pos[no] || 0;
       let o = exitOnly(s, id, ms, ordersFor(ms, yesHeld, noHeld), yesHeld, noHeld);
       o = takeProfit(ms, o, { [yes]: yesHeld, [no]: noHeld }, winners, bestBid);
+      // sell-immediately; once flat, the market sits out a few minutes before quoting again
+      for (const [tok, h] of [[yes, yesHeld], [no, noHeld]]) {
+        const f = flat.get(tok); if (!f || h >= 5) continue;
+        if (Date.now() - f.at > 15000) { // flat (positions caught up): clear and cool
+          flat.delete(tok);
+          ms.coolUntil = Math.max(ms.coolUntil || 0, Date.now() + FLAT_COOL_MIN * 60000);
+          E.log(s, `[${ms.meta.question.slice(0, 28)}] FLAT — fill sold off, sitting out ${FLAT_COOL_MIN} min`, 'g');
+        }
+      }
+      if (FLATTEN) o = flattenOrders(ms, o, { [yes]: yesHeld, [no]: noHeld }, flat, bestBid);
+      for (const x of o) if (x.leg === 'flatten' && Date.now() - (tpLogged.get('f' + x.token) || 0) > 60000) {
+        tpLogged.set('f' + x.token, Date.now());
+        const f = flat.get(x.token);
+        E.log(s, `[${ms.meta.question.slice(0, 28)}] SELL NOW — ${x.size} @ ${x.price} (filled @ ${f && f.price}, ${f ? ((x.price - f.price) * 100).toFixed(1) : '?'}¢/share)`, 'g');
+      }
       for (const x of o) if (x.taker && Date.now() - (tpLogged.get(x.token) || 0) > 300000) {
         tpLogged.set(x.token, Date.now());
         E.log(s, `[${ms.meta.question.slice(0, 28)}] TAKE PROFIT — selling ${x.size} @ ${x.price} now (cost ${winners.get(x.token)})`, 'q');

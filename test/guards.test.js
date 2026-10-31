@@ -62,6 +62,9 @@ console.log('guards ok');
   assert.deepStrictEqual(o.map(x => [x.token, x.side, x.price, x.size, !!x.taker]), [['TN', 'BUY', 0.57, 20, false], ['TY', 'SELL', 0.4, 20, true]], JSON.stringify(o));
   // bid fell back to ~cost: no fire-sale, orders unchanged
   assert.strictEqual(takeProfit(ms, orders, { TY: 20 }, win, () => 0.245), orders);
+  // a 2¢ gain is enough: bank it before it turns
+  assert.strictEqual(takeProfit(ms, orders, { TY: 20 }, win, () => 0.26).find(x => x.taker).price, 0.26);
+  assert.strictEqual(takeProfit(ms, orders, { TY: 20 }, win, () => 0.25), orders, '1¢ is not enough (spread/fees)');
   // not a winner / nothing held → unchanged
   assert.strictEqual(takeProfit(ms, orders, { TY: 20 }, new Map(), () => 0.4), orders);
   assert.strictEqual(takeProfit(ms, orders, { TY: 2 }, win, () => 0.4), orders);

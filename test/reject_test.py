@@ -61,11 +61,18 @@ async def main():
     )
     print("baseline ok")
     rows = [
-        {"asset": "gem", "pnl": 3.2, "avg": 0.24, "cur": 0.40},
-        {"asset": "tiny", "pnl": 0.4, "avg": 0.20, "cur": 0.30},  # +50 % but only $0.40
-        {"asset": "flat", "pnl": 1.5, "avg": 0.50, "cur": 0.52},  # $1.50 but only +4 %
+        {"asset": "gem", "size": 20, "pnl": 3.2, "avg": 0.24, "cur": 0.40},
+        {
+            "asset": "small",
+            "size": 20,
+            "pnl": 0.4,
+            "avg": 0.50,
+            "cur": 0.52,
+        },  # +2¢: any gain counts now
+        {"asset": "flat", "size": 20, "pnl": 0.0, "avg": 0.50, "cur": 0.50},
+        {"asset": "down", "size": 20, "pnl": -1.0, "avg": 0.50, "cur": 0.45},
     ]
-    assert lr.winners(rows) == [{"asset": "gem", "avg": 0.24}], lr.winners(rows)
+    assert [w["asset"] for w in lr.winners(rows)] == ["gem", "small"], lr.winners(rows)
     print("winners ok")
     # account summary from Polymarket's own data (31 Oct: $4.21 reward just after 00:00 UTC)
     act = [

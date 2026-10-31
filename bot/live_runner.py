@@ -229,16 +229,17 @@ def losers(rows, usd=1.0, frac=0.15):
     ]
 
 
-TP_USD = float(os.environ.get("TAKE_PROFIT_USD", "1"))
-TP_FRAC = float(os.environ.get("TAKE_PROFIT_FRAC", "0.15"))
+# sell held shares as soon as the price is this many cents above cost — bank any gain before it turns
+TP_MIN_C = float(os.environ.get("TAKE_PROFIT_C", "2"))
 
 
-def winners(rows, usd=TP_USD, frac=TP_FRAC):
-    """Held positions up ≥ $usd AND ≥ frac above cost → [{asset, avg}] for a quick take-profit exit."""
+def winners(rows, min_c=TP_MIN_C):
+    """Held positions trading ≥ min_c ¢ above cost → [{asset, avg}]; the engine sells them at the live best bid
+    if that bid still clears cost + min_c (the data-api price lags, the bid decides)."""
     return [
         {"asset": r["asset"], "avg": r["avg"]}
         for r in rows
-        if r["avg"] > 0 and r["pnl"] >= usd and r["cur"] / r["avg"] - 1 >= frac
+        if r["avg"] > 0 and r["size"] >= 1 and (r["cur"] - r["avg"]) * 100 >= min_c - 1
     ]
 
 

@@ -76,7 +76,12 @@
   }
   function pill(id, text, c) { const el = $(id); el.textContent = text; el.className = 'pill ' + (c || ''); }
 
+  const n = x => (typeof x === 'number' && isFinite(x) ? x : 0);
   function render(s) {
+    s.stats = s.stats || {}; s.pullMs = s.pullMs || {}; s.markets = s.markets || []; s.orders = s.orders || []; s.events = s.events || [];
+    s.collateral = n(s.collateral); s.capital = n(s.capital) || 1; s.lossUsedPct = n(s.lossUsedPct);
+    (s.positions || []).forEach(p => { p.size = n(p.size); p.avg = n(p.avg); p.cur = n(p.cur); p.pnl = n(p.pnl); });
+    s.orders.forEach(o => { o.price = n(o.price); o.usd = n(o.usd); });
     pill('mode', s.mode, s.mode === 'LIVE' ? 'live' : 'dry');
     pill('loc', s.location || 'location —');
     pill('hb', 'heartbeat ' + (s.mode === 'LIVE' ? ago(s.heartbeatAgeSec) : 'off (dry)'), s.mode === 'LIVE' && (s.heartbeatAgeSec == null || s.heartbeatAgeSec > 12) ? 'warn' : '');
@@ -114,12 +119,17 @@
       ul.append(li);
     }
   }
-  let fails = 0;
+  let fails = 0, lastOk = 0;
   async function tick() {
+    let s = null;
     try {
       const r = await fetch('/status', { cache: 'no-store' });
-      render(await r.json()); fails = 0;
-    } catch (e) { if (++fails > 2) pill('mode', 'bot not reachable — is the service running / SSH tunnel open?', 'warn'); }
+      s = await r.json(); fails = 0; lastOk = Date.now();
+    } catch (e) {
+      if (++fails > 2) pill('mode', `bot not reachable for ${ago((Date.now() - lastOk) / 1000)} — SSH tunnel closed or service restarting`, 'warn');
+    }
+    // a bad field must not freeze the whole page: say so instead of silently keeping old numbers
+    if (s) try { render(s); } catch (e) { pill('mode', 'page error: ' + (e && e.message || e) + ' — data still arriving', 'warn'); }
     setTimeout(tick, 2000);
   }
   tick();

@@ -16,6 +16,9 @@ for (const q of ['Will BTC close above $120k on Dec 31?', 'Lakers vs Celtics: wh
 // scheduled decisions gap at a known time (the ECB market lost 16¢ on 30 Oct)
 for (const q of ['Will the ECB make no change to the deposit facility rate at the February meeting?', 'Will the Fed cut rates in December?'])
   assert(E.isHeadline(q), q);
+// 31 Oct leaks: word stems and political-meeting markets
+for (const q of ['US imports Russian diesel by January 31?', 'Will Trump meet with Sam Altman by November 30, 2026?', 'Israeli strike on Iranian oil by March?'])
+  assert(E.isHeadline(q), q);
 
 // 2) loss cool-down: losing YES → only SELLs survive, held shares still offered, blacklisted for 24 h
 const s = E.freshState(68); s.P.live = true; s.P.headlineFilter = 0;

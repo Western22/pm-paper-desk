@@ -64,7 +64,10 @@ console.log('guards ok');
   assert.strictEqual(takeProfit(ms, orders, { TY: 20 }, win, () => 0.245), orders);
   // a 2¢ gain is enough: bank it before it turns
   assert.strictEqual(takeProfit(ms, orders, { TY: 20 }, win, () => 0.26).find(x => x.taker).price, 0.26);
-  assert.strictEqual(takeProfit(ms, orders, { TY: 20 }, win, () => 0.25), orders, '1¢ is not enough (spread/fees)');
+  assert.strictEqual(takeProfit(ms, orders, { TY: 20 }, win, () => 0.25), orders, '1¢ on 20 shares ($0.20) is not enough');
+  // $1 rule: 100 shares up 1¢ = $1 → bank it; 99 shares up 1¢ = $0.99 → hold
+  assert(takeProfit(ms, orders, { TY: 100 }, win, () => 0.25).some(x => x.taker && x.size === 100));
+  assert.strictEqual(takeProfit(ms, orders, { TY: 99 }, win, () => 0.25), orders);
   // not a winner / nothing held → unchanged
   assert.strictEqual(takeProfit(ms, orders, { TY: 20 }, new Map(), () => 0.4), orders);
   assert.strictEqual(takeProfit(ms, orders, { TY: 2 }, win, () => 0.4), orders);

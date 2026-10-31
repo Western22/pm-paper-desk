@@ -53,11 +53,15 @@ function exitOnly(s, id, ms, orders, yesHeld, noHeld, E = require(path.join(__di
  *  bid — a marketable order (taker: true), not a resting ask — whenever that bid is ≥ cost + `minC` ¢ (default
  *  2¢, env TAKE_PROFIT_C): any gain is banked before it can turn into a loss. Buys of that token are dropped so
  *  the exit isn't immediately undone. */
-function takeProfit(ms, orders, held, winners, bestBid, minC = +(process.env.TAKE_PROFIT_C || 2)) {
+function takeProfit(ms, orders, held, winners, bestBid, minC = +(process.env.TAKE_PROFIT_C || 2), minUsd = +(process.env.TAKE_PROFIT_USD || 1)) {
   let out = orders;
   for (const t of ms.meta.tokens.map(x => String(x.id))) {
     const avg = winners && winners.get(t), n = Math.floor(held[t] || 0), bid = bestBid(t);
-    if (!avg || n < MIN_ORDER || !(bid > 0) || bid < avg + minC / 100 - 1e-9) continue;
+    if (!avg || n < MIN_ORDER || !(bid > 0)) continue;
+    const per = bid - avg; // gain per share if sold to the best bid now
+    // fire on ≥ minC ¢/share, or on a ≥ $minUsd total gain (big positions) as long as it's ≥ 1¢/share
+    const hit = per >= minC / 100 - 1e-9 || (per >= 0.01 - 1e-9 && per * n >= minUsd - 1e-9);
+    if (!hit) continue;
     out = out.filter(o => o.token !== t);
     out.push({ market: ms.meta.id, question: ms.meta.question, token: t, side: 'SELL', price: +bid.toFixed(4), size: n, leg: 'take-profit', taker: true });
   }

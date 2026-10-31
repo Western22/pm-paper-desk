@@ -72,6 +72,11 @@ BATCH = 15
 EVENTS = collections.deque(maxlen=400)  # recent log lines for the live dashboard
 LOCATION = {"info": "not checked (dry run)"}
 POSITION_ROWS = []  # latest wallet positions (data-api), for the dashboard
+ACCOUNT = {}  # the account as Polymarket reports it (value, cash, rewards, activity) — for the dashboard
+NET_DEPOSITS = float(
+    os.environ.get("NET_DEPOSITS_USDC", "0") or 0
+)  # what you put in, for P&L vs deposits
+REWARD_TYPES = {"REWARD", "MAKER_REBATE", "LIQUIDITY_REWARD"}
 
 
 def log(*a):
@@ -112,6 +117,83 @@ def fetch_positions():
         if float(p.get("size") or 0) > 0
     )
     return pos, pnl
+
+
+def summarize_account(value_rows, activity, cash=None, net_deposits=0.0, now=None):
+    """Polymarket's own numbers: positions value (/value), rewards and trades (/activity), cash (exchange)."""
+    now = now or time.time()
+    day0 = (
+        now - now % 86400
+    )  # 00:00 UTC — rewards for the previous day land just after it
+    pos_value = sum(float(v.get("value") or 0) for v in value_rows or [])
+    # any reward-like type counts (REWARD, MAKER_REBATE, …) — the API's naming isn't documented
+    rew = [
+        a
+        for a in activity
+        if str(a.get("type", "")).upper() in REWARD_TYPES
+        or "REWARD" in str(a.get("type", "")).upper()
+        or "REBATE" in str(a.get("type", "")).upper()
+    ]
+    dep = sum(
+        float(a.get("usdcSize") or 0)
+        for a in activity
+        if str(a.get("type", "")).upper() == "DEPOSIT"
+    )
+    wd = sum(
+        float(a.get("usdcSize") or 0)
+        for a in activity
+        if str(a.get("type", "")).upper() == "WITHDRAW"
+    )
+    net = net_deposits or (dep - wd)
+    total = None if cash is None else cash + pos_value
+    return {
+        "at": now,
+        "positionsValue": round(pos_value, 2),
+        "cash": None if cash is None else round(cash, 2),
+        "total": None if total is None else round(total, 2),
+        "netDeposits": round(net, 2) if net else None,
+        "pnl": round(total - net, 2) if total is not None and net else None,
+        "rewardsToday": round(
+            sum(
+                float(a.get("usdcSize") or 0)
+                for a in rew
+                if float(a.get("timestamp") or 0) >= day0
+            ),
+            2,
+        ),
+        "rewardsAll": round(sum(float(a.get("usdcSize") or 0) for a in rew), 2),
+        "activity": [
+            {
+                "t": int(a.get("timestamp") or 0),
+                "type": str(a.get("type", "")),
+                "side": a.get("side") or "",
+                "title": a.get("title") or "",
+                "outcome": a.get("outcome") or "",
+                "size": round(float(a.get("size") or 0), 2),
+                "price": round(float(a.get("price") or 0), 3),
+                "usdc": round(float(a.get("usdcSize") or 0), 2),
+            }
+            for a in activity[:30]
+        ],
+    }
+
+
+def parse_cash(r):
+    """Collateral balance from whatever the SDK returns (number, object or dict; base units → dollars)."""
+    for v in (
+        r,
+        getattr(r, "balance", None),
+        r.get("balance") if isinstance(r, dict) else None,
+    ):
+        if v is None or isinstance(v, bool):
+            continue
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            continue
+        # collateral has 6 decimals: an integer-looking amount above 10 000 is base units
+        return x / 1e6 if ("." not in str(v) and x > 1e4) else x
+    return None
 
 
 def loss_baseline(pnl, path=None):
@@ -586,6 +668,69 @@ class Executor:
         self.engine.stdin.write((json.dumps(obj) + "\n").encode())
         await self.engine.stdin.drain()
 
+    async def cash(self):
+        """Exchange collateral balance via the SDK (method name differs between versions; first one that works wins)."""
+        if not LIVE or not self.client:
+            return None
+        names = (
+            [self._cash_fn]
+            if getattr(self, "_cash_fn", None)
+            else [
+                "get_collateral_balance",
+                "get_balance",
+                "get_usdc_balance",
+                "get_balance_allowance",
+                "balance",
+            ]
+        )
+        for n in names:
+            fn = getattr(self.client, n, None)
+            if not callable(fn):
+                continue
+            try:
+                r = fn()
+                if asyncio.iscoroutine(r):
+                    r = await r
+                x = parse_cash(r)
+            except Exception:  # noqa: BLE001, S112 — wrong signature for this SDK: try the next name
+                continue
+            if x is not None:
+                if getattr(self, "_cash_fn", None) != n:
+                    log(f"[account] cash balance via client.{n}()")
+                self._cash_fn = n
+                return x
+        if not getattr(self, "_cash_warned", False):
+            self._cash_warned = True
+            log(
+                "[account] cash balance not available from this SDK — showing positions value and rewards only"
+            )
+        return None
+
+    async def account_loop(self):
+        """Every 60 s: the account exactly as Polymarket reports it, for the live page."""
+        while not self.stop.is_set():
+            if WALLET:
+                try:
+                    q = urllib.parse.urlencode({"user": WALLET})
+                    val = await asyncio.to_thread(get_json, f"{DATA}/value?{q}")
+                    act = await asyncio.to_thread(
+                        get_json,
+                        f"{DATA}/activity?{urllib.parse.urlencode({'user': WALLET, 'limit': 500})}",
+                    )
+                    ACCOUNT.clear()
+                    ACCOUNT.update(
+                        summarize_account(
+                            val if isinstance(val, list) else [val],
+                            act if isinstance(act, list) else [],
+                            await self.cash(),
+                            NET_DEPOSITS,
+                        )
+                    )
+                except Exception as e:  # noqa: BLE001 — the page just shows the previous snapshot
+                    log("[account]", e)
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self.stop.wait(), 60)
+
     async def positions_loop(self):
         last_rec = time.time()
         while not self.stop.is_set():
@@ -650,6 +795,7 @@ class Executor:
                 self.heartbeat(),
                 self.read_engine(),
                 self.positions_loop(),
+                self.account_loop(),
                 self.user_stream(),
                 self.paper_loop(),
             )

@@ -42,6 +42,12 @@
   <span class="pill" id="upd">—</span>
 </header>
 <main>
+  <section class="kpis" id="acct">
+    <div class="kpi"><div class="l">Polymarket account value</div><div class="v" id="aval">—</div><div class="l" id="aval2">cash + positions, as Polymarket reports it</div></div>
+    <div class="kpi"><div class="l">Cash</div><div class="v" id="acash">—</div><div class="l" id="apos">positions —</div></div>
+    <div class="kpi"><div class="l">P&amp;L vs deposits</div><div class="v" id="apnl">—</div><div class="l" id="adep">deposits —</div></div>
+    <div class="kpi"><div class="l">Liquidity rewards</div><div class="v" id="arew">—</div><div class="l" id="arew2">all-time —</div></div>
+  </section>
   <section class="kpis">
     <div class="kpi"><div class="l">Wallet P&amp;L since start</div><div class="v" id="pnl">—</div>
       <div class="bar"><i id="lossbar" style="width:0"></i></div><div class="l" id="losslbl">loss limit —</div></div>
@@ -56,6 +62,7 @@
     <section class="panel"><h2>Positions (wallet)</h2><div class="scroll"><table><thead><tr><th>Market</th><th>Outcome</th><th>Shares</th><th>Avg</th><th>Now</th><th>P&amp;L</th></tr></thead><tbody id="positions"></tbody></table></div></section>
     <section class="panel"><h2>Markets (engine)</h2><div class="scroll"><table><thead><tr><th>Market</th><th>Status</th><th>Inventory</th><th>Mid</th><th>Feed</th></tr></thead><tbody id="markets"></tbody></table></div></section>
   </div>
+  <section class="panel"><h2>Polymarket activity (trades, rewards, deposits)</h2><div class="scroll"><table><thead><tr><th>Time</th><th>Type</th><th>Market</th><th>Side</th><th>Shares</th><th>Price</th><th>USDC</th></tr></thead><tbody id="activity"></tbody></table></div></section>
   <section class="panel"><h2>Events</h2><ul id="events"></ul></section>
 </main>
 <script>
@@ -109,6 +116,20 @@
     rows($('markets'), s.markets, m => [[m.question || '', 'q'], [m.status || '', /QUOTING/.test(m.status) ? 'ok' : /GATED|SHARP|EVENT/.test(m.status) ? 'warn' : 'dim'],
       [m.inv == null ? '—' : m.inv.toFixed(1)], [m.mid == null ? '—' : (m.mid * 100).toFixed(1) + '¢'], [m.ws ? 'live' : 'http', m.ws ? 'ok' : 'warn']],
       'Engine is choosing markets (first scan takes about a minute)…', 5);
+    const a = s.account || {};
+    const m2 = x => (x == null ? '—' : '$' + x.toFixed(2));
+    $('aval').textContent = m2(a.total);
+    $('aval2').textContent = a.at ? `updated ${ago(s.now - a.at)} ago · from Polymarket` : 'waiting for Polymarket (every 60 s)…';
+    $('acash').textContent = m2(a.cash);
+    $('apos').textContent = 'positions ' + m2(a.positionsValue);
+    $('apnl').textContent = usd(a.pnl); $('apnl').className = 'v ' + cls(a.pnl);
+    $('adep').textContent = a.netDeposits ? `net deposits $${a.netDeposits.toFixed(2)}` : 'set NET_DEPOSITS_USDC to see P&L';
+    $('arew').textContent = m2(a.rewardsToday); $('arew').className = 'v ' + (a.rewardsToday > 0 ? 'ok' : 'dim');
+    $('arew2').textContent = `paid since 00:00 UTC · all-time ${m2(a.rewardsAll)}`;
+    const typeCls = t => /REWARD|REBATE/.test(t) ? 'ok' : /DEPOSIT/.test(t) ? 'dim' : '';
+    rows($('activity'), a.activity || [], x => [[new Date(x.t * 1000).toLocaleString()], [x.type, typeCls(x.type)], [x.title || '—', 'q'],
+      [x.side || '', x.side === 'BUY' ? 'ok' : x.side === 'SELL' ? 'warn' : ''], [x.size ? x.size.toFixed(2) : ''], [x.price ? x.price.toFixed(3) : ''], ['$' + (x.usdc || 0).toFixed(2)]],
+      'No activity from Polymarket yet.', 7);
     const ul = $('events'); ul.replaceChildren();
     for (const e of s.events.slice().reverse()) {
       const li = document.createElement('li'), t = document.createElement('span');

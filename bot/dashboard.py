@@ -102,17 +102,17 @@ async def serve(ex, host: str, port: int, lr):
                 pass  # headers ignored
             path = req.split(" ")[1] if " " in req else "/"
             if path.startswith("/status"):
-                body = json.dumps(
-                    status(
-                        ex,
-                        lr.LIVE,
-                        lr.MAX_USDC,
-                        lr.MAX_LOSS,
-                        lr.EVENTS,
-                        lr.LOCATION,
-                        lr.POSITION_ROWS,
-                    )
-                ).encode()
+                st = status(
+                    ex,
+                    lr.LIVE,
+                    lr.MAX_USDC,
+                    lr.MAX_LOSS,
+                    lr.EVENTS,
+                    lr.LOCATION,
+                    lr.POSITION_ROWS,
+                )
+                st["account"] = dict(getattr(lr, "ACCOUNT", {}) or {})
+                body = json.dumps(st).encode()
                 ctype = "application/json"
             elif path in ("/", "/index.html"):
                 body, ctype = PAGE.read_bytes(), "text/html; charset=utf-8"

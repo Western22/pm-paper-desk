@@ -67,6 +67,39 @@ async def main():
     ]
     assert lr.winners(rows) == [{"asset": "gem", "avg": 0.24}], lr.winners(rows)
     print("winners ok")
+    # account summary from Polymarket's own data (31 Oct: $4.21 reward just after 00:00 UTC)
+    act = [
+        {"type": "REWARD", "usdcSize": 4.2124, "timestamp": 1793404810},
+        {
+            "type": "TRADE",
+            "side": "SELL",
+            "title": "ECB",
+            "size": 20,
+            "price": 0.24,
+            "usdcSize": 4.8,
+            "timestamp": 1793402026,
+        },
+        {"type": "REWARD", "usdcSize": 1.0, "timestamp": 1793300000},  # yesterday
+        {"type": "DEPOSIT", "usdcSize": 19.3, "timestamp": 1793346822},
+    ]
+    a = lr.summarize_account(
+        [{"value": 7.1}], act, cash=52.0, net_deposits=70.3, now=1793405000
+    )
+    assert (a["total"], a["pnl"], a["rewardsToday"], a["rewardsAll"]) == (
+        59.1,
+        -11.2,
+        4.21,
+        5.21,
+    ), a
+    assert a["activity"][1]["side"] == "SELL" and len(a["activity"]) == 4
+    b = lr.summarize_account([{"value": 7.1}], act, cash=None)
+    assert b["total"] is None and b["netDeposits"] == 19.3 and b["pnl"] is None
+    assert lr.parse_cash(52.31) == 52.31 and lr.parse_cash("52310000") == 52.31
+    assert (
+        lr.parse_cash({"balance": "52310000"}) == 52.31
+        and lr.parse_cash(object()) is None
+    )
+    print("account ok")
 
 
 asyncio.run(main())

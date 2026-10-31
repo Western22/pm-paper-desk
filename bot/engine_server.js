@@ -14,7 +14,9 @@ const readline = require('readline');
 const E = require(path.join(__dirname, '..', 'lib', 'paper-engine.js'));
 const Q = require(path.join(__dirname, '..', 'engine.js'));
 const Core = require(path.join(__dirname, '..', 'paper.js'));
-const { ordersFor, exitOnly, takeProfit, flattenOrders, withoutOurs } = require(path.join(__dirname, 'decide.js'));
+const { ordersFor, exitOnly, takeProfit, flattenOrders, withoutOurs, queueShield } = require(path.join(__dirname, 'decide.js'));
+const SHIELD = process.env.SHIELD !== '0', SHIELD_K = +(process.env.SHIELD_K || 2); // others' size ahead ≥ K× ours
+const shieldLogged = new Map();
 let winners = new Map(); const tpLogged = new Map();
 // sell-immediately: token → { price, at } for shares a BUY fill just gave us (FLATTEN=0 turns it off)
 const FLATTEN = process.env.FLATTEN !== '0';
@@ -85,7 +87,7 @@ function asBook(b) {
 }
 function getBook(ms) {
   const b = books.get(String(ms.meta.tokens[0].id));
-  return b && Date.now() - b.at < BOOK_STALE_MS ? asBook(withoutOurs(b, ms.quote)) : undefined; // others' orders only
+  return b && Date.now() - b.at < BOOK_STALE_MS ? asBook(withoutOurs(b, ms.restQuote || ms.quote)) : undefined; // others' orders only
 }
 
 /** Fast path: on every book change, pull a market's orders at once if the mid ran away from where we quoted. */
@@ -93,11 +95,12 @@ function dangerCheck(tok) {
   const id = tokenIdx.get(tok); const ms = id && s.markets[id]; const b = books.get(tok);
   if (!ms || !ms.quote || !b || ms.lastMid == null) return;
   // same size-adjusted mid as the engine and Polymarket's reward scoring (dust orders don't move it)
-  const comp = Q.competition(asBook(withoutOurs(b, ms.quote)), ms.meta.v, ms.meta.minSize); if (!comp) return;
+  const comp = Q.competition(asBook(withoutOurs(b, ms.restQuote || ms.quote)), ms.meta.v, ms.meta.minSize); if (!comp) return;
   const bb = comp.bestBid ?? 0, ba = comp.bestAsk ?? 1;
   const mid = comp.mid, move = Math.abs(mid - ms.lastMid) * 100;
   const lim = Math.max(1.5, 0.4 * ms.meta.v); // same jump threshold as the engine's shock gate
-  const crossed = (ms.quote.bs > 0 && ba <= ms.quote.bid - 1e-9) || (ms.quote.as > 0 && bb >= ms.quote.ask + 1e-9);
+  const rq = ms.restQuote || ms.quote;
+  const crossed = (rq.bs > 0 && ba <= rq.bid - 1e-9) || (rq.as > 0 && bb >= rq.ask + 1e-9);
   const big = crossed || move >= (s.P.bigJumpC ?? 4);
   if (move >= lim || crossed) pull(id, crossed ? 'book crossed our quote' : `mid jumped ${move.toFixed(1)}¢`, s.P.cooldownMin || 20, big);
   else kick(); // a competitor changed the book: re-optimise our quote now (hysteresis keeps queue if not worth it)
@@ -195,6 +198,17 @@ async function tick() {
     if (posAt) for (const [id, ms] of Object.entries(s.markets)) {
       const [yes, no] = ms.meta.tokens.map(t => String(t.id));
       const yesHeld = +pos[yes] || 0, noHeld = +pos[no] || 0;
+      // never first in line (flat markets only — with inventory the sell legs must stay where they are)
+      const raw = books.get(yes);
+      if (SHIELD && ms.quote && Math.abs(ms.inv) < 5 && raw && Date.now() - raw.at < BOOK_STALE_MS && ms.lastMid != null) {
+        const before = ms.quote;
+        ms.quote = queueShield(before, withoutOurs(raw, ms.restQuote || before), ms.lastMid, ms.meta.v, ms.meta.tick || 0.01, SHIELD_K);
+        if ((before.bs > 0 && !ms.quote.bs) || (before.as > 0 && !ms.quote.as) || before.bid !== ms.quote.bid || before.ask !== ms.quote.ask) {
+          const k = `${id}:${ms.quote.bid}/${ms.quote.bs}:${ms.quote.ask}/${ms.quote.as}`;
+          if (shieldLogged.get(id) !== k) { shieldLogged.set(id, k); E.log(s, `[${ms.meta.question.slice(0, 28)}] SHIELD — bid ${before.bid}→${ms.quote.bs ? ms.quote.bid : 'off'} · ask ${before.ask}→${ms.quote.as ? ms.quote.ask : 'off'} (need ${SHIELD_K}× our size ahead)`, 'g'); }
+        }
+      }
+      ms.restQuote = ms.quote;
       let o = exitOnly(s, id, ms, ordersFor(ms, yesHeld, noHeld), yesHeld, noHeld);
       o = takeProfit(ms, o, { [yes]: yesHeld, [no]: noHeld }, winners, bestBid);
       // sell-immediately; once flat, the market sits out a few minutes before quoting again

@@ -98,6 +98,32 @@ function withoutOurs(b, q) {
   return Object.assign({}, b, { bids: cut(b.bids, q.bid, q.bs), asks: cut(b.asks, q.ask, q.as) });
 }
 
+/** Never first in line: rest a side only where OTHER makers already show ≥ k× our size at the same or a better
+ *  price, so an informed seller/buyer fills them first. Otherwise step back up to `maxSteps` ticks (staying inside
+ *  the reward band); if no level is shielded, don't quote that side. `others`: book WITHOUT our orders
+ *  ({ bids: Map, asks: Map }), `q`: the engine's quote ({ bid, bs, ask, as }), v in ¢. Returns a new quote. */
+function queueShield(q, others, mid, v, tick = 0.01, k = 2, maxSteps = 3) {
+  if (!q || !others) return q;
+  const out = Object.assign({}, q);
+  const depth = (m, p, better) => { let d = 0; for (const [x, z] of m) if (better(x, p)) d += z; return d; };
+  const lo = mid - v / 100 + 1e-9, hi = mid + v / 100 - 1e-9;
+  if (out.bs > 0) {
+    let p = out.bid, ok = false;
+    for (let i = 0; i <= maxSteps && p >= lo; i++, p = +(p - tick).toFixed(4)) {
+      if (depth(others.bids, p, (x, y) => x >= y - 1e-9) >= k * out.bs) { ok = true; break; }
+    }
+    if (ok) out.bid = p; else out.bs = 0;
+  }
+  if (out.as > 0) {
+    let p = out.ask, ok = false;
+    for (let i = 0; i <= maxSteps && p <= hi; i++, p = +(p + tick).toFixed(4)) {
+      if (depth(others.asks, p, (x, y) => x <= y + 1e-9) >= k * out.as) { ok = true; break; }
+    }
+    if (ok) out.ask = p; else out.as = 0;
+  }
+  return out;
+}
+
 async function main() {
   const statePath = process.argv[2] || 'live-state.json';
   const input = readStdin();
@@ -128,4 +154,4 @@ async function main() {
 }
 if (require.main === module) main().catch(e => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) }) + '\n'); process.exit(1); });
 
-module.exports = { ordersFor, exitOnly, takeProfit, flattenOrders, withoutOurs };
+module.exports = { ordersFor, exitOnly, takeProfit, flattenOrders, withoutOurs, queueShield };

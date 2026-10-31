@@ -138,3 +138,32 @@ console.log('guards ok');
   assert.strictEqual(withoutOurs(withMe, null), withMe);
   console.log('own-order exclusion ok');
 }
+
+// 9) never first in line: thin book (others 10 @0.46) → our 21-share bid steps back to where ≥42 rest ahead
+{
+  const { queueShield } = require('../bot/decide.js');
+  const others = { bids: new Map([[0.46, 10], [0.45, 15], [0.44, 30]]), asks: new Map([[0.54, 60]]) };
+  const q = { bid: 0.46, bs: 21, ask: 0.54, as: 21, mode: 'two' };
+  const s1 = queueShield(q, others, 0.50, 7, 0.01, 2);
+  assert.strictEqual(s1.bid, 0.44, 'depth ≥0.44 = 55 ≥ 42'); assert.strictEqual(s1.bs, 21);
+  assert.strictEqual(s1.ask, 0.54, '60 ahead at the same price ≥ 42'); assert.strictEqual(s1.as, 21);
+  // nothing ahead anywhere in the band → that side is off
+  const s2 = queueShield(q, { bids: new Map(), asks: new Map([[0.54, 60]]) }, 0.50, 7);
+  assert.strictEqual(s2.bs, 0); assert.strictEqual(s2.as, 21);
+  // never steps outside the reward band (mid 0.50, v 3¢ → lowest bid 0.47 > 0.44 shield level)
+  assert.strictEqual(queueShield(q, others, 0.50, 3).bs, 0);
+  console.log('queue shield ok');
+}
+
+// 10) per-market fill tracking: one 16¢ pick-off → that market is out for 24 h and plans with its own cost
+{
+  const s = E.freshState(52); s.P.live = true;
+  s.markets.O = P.newMarketState(mk('O', 'Will BTC close above $190k?', 'btc6'), model, now, 20);
+  E.recordFill(s, { asset: 'OY', side: 'BUY', price: 0.40, size: 9 }, now);
+  s.markets.O.lastMid = 0.24;
+  E.scoreFills(s, now + 61 * 60000);
+  assert(s.markets.O.lossCoolUntil > now && s.blacklist.O > now, 'toxic market out');
+  assert.strictEqual(s.markets.O.model.marketMarkoutC, 16);
+  assert.strictEqual(E.applyMarkout(s.markets.O.model, { live: true, liveMarkoutC: 9 }).markout, 16);
+  console.log('per-market toxicity ok');
+}

@@ -584,16 +584,28 @@ class Executor:
                 f"[sell] {n} × {str(r.get('title'))[:50]} {r.get('outcome')} · limit ≥ {floor:.2f} (now {r['cur']}, cost {r['avg']})"
             )
 
-    def flatten_soon(self, asset, fill_price):
+    def flatten_soon(self, asset, fill_price, floor=None):
         """Fire-and-forget sell of everything held in `asset` (one in flight per asset)."""
         self.flattening = getattr(self, "flattening", set())
         if asset in self.flattening:
             return
         self.flattening.add(asset)
-        task = asyncio.create_task(self.flatten_now(asset, fill_price))
+        task = asyncio.create_task(self.flatten_now(asset, fill_price, floor))
         task.add_done_callback(lambda _t: self.flattening.discard(asset))
 
-    async def flatten_now(self, asset, fill_price):
+    def take_profits(self):
+        """Executor-side take-profit for EVERY held position (engine markets or not, any restart): price ≥ cost +
+        TAKE_PROFIT_C → sell with a limit at cost + 1¢. It executes against every bid above that — so the sale is
+        always at a profit — and any rest waits there as an ask that can only fill at a profit too."""
+        for w in winners(POSITION_ROWS):
+            a = str(w["asset"])
+            if a in getattr(self, "flattening", set()) or self.pos.get(a, 0.0) < 5:
+                continue
+            floor = math.ceil((w["avg"] + 0.01) * 100) / 100
+            if floor < 0.99:
+                self.flatten_soon(a, w["avg"], floor)
+
+    async def flatten_now(self, asset, fill_price, floor=None):
         """Sell the shares a fill just gave us, now: a SELL limit at fill − slip executes against the best bids
         (CLOB gives the taker the makers' prices), so the real price is usually the bid, 1–3¢ under the fill."""
         await asyncio.sleep(
@@ -602,7 +614,13 @@ class Executor:
         n = int(self.pos.get(asset, 0.0))
         if n < 5:
             return
-        floor = max(0.01, math.floor((fill_price - FLATTEN_SLIP_C / 100) * 100) / 100)
+        tp = (
+            floor is not None
+        )  # take-profit: an unfilled rest must stay up (the engine doesn't know it)
+        if floor is None:
+            floor = max(
+                0.01, math.floor((fill_price - FLATTEN_SLIP_C / 100) * 100) / 100
+            )
         m = next(
             (m for m in self.markets or [] if asset in (m.get("tokens") or [])), {}
         )
@@ -628,8 +646,12 @@ class Executor:
                 await self.place_batch([o])
             await self.report_resting()
             if self.stats["rejected"] == rej:
+                if tp:
+                    self.manual = getattr(self, "manual", {})
+                    self.manual[key(o)] = time.time()
                 log(
-                    f"SELL NOW {o['size']} (limit ≥ {floor:.2f}, filled @ {fill_price}) · {(time.time() - t0) * 1000:.0f} ms"
+                    ("TAKE PROFIT" if tp else "SELL NOW")
+                    + f" {o['size']} (limit ≥ {floor:.2f}, {'cost' if tp else 'filled @'} {fill_price}) · {(time.time() - t0) * 1000:.0f} ms"
                     + (f" · after {attempt} settlement retries" if attempt else "")
                 )
                 return
@@ -950,6 +972,7 @@ class Executor:
                 else:
                     log("[positions]", e)
             await self.operator_sells()
+            self.take_profits()
             if time.time() - self.last_engine > 30 and self.resting:
                 await self.cancel_all("engine silent > 30 s")
             if time.time() - last_rec > RECONCILE_SEC:

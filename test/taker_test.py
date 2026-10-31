@@ -111,6 +111,47 @@ async def main():
     assert tries == [9, 9, 9], tries
     print("settlement retry ok")
 
+    # executor-side take-profit: Altman 25 @0.36 now 0.41 → sell with limit 0.37 (profit guaranteed), kept up
+    lr.POSITION_ROWS[:] = [
+        {
+            "asset": "A1",
+            "title": "Altman",
+            "outcome": "Yes",
+            "size": 25.0,
+            "avg": 0.36,
+            "cur": 0.41,
+            "pnl": 1.25,
+        },
+        {
+            "asset": "L1",
+            "title": "loser",
+            "outcome": "No",
+            "size": 20.0,
+            "avg": 0.50,
+            "cur": 0.45,
+            "pnl": -1.0,
+        },
+    ]
+    ex5 = lr.Executor()
+    ex5.send = send
+    ex5.markets = []
+    ex5.pos = {"A1": 25.0, "L1": 20.0}
+    got = []
+
+    async def place5(orders):
+        got.extend(orders)
+
+    ex5.place_batch = place5
+    ex5.take_profits()
+    await asyncio.sleep(0.2)
+    assert [(o["token"], o["side"], o["size"], o["price"]) for o in got] == [
+        ("A1", "SELL", 25, 0.37)
+    ], got
+    assert lr.key(got[0]) in ex5.manual, (
+        "a resting take-profit isn't cancelled by the engine sync"
+    )
+    print("executor take-profit ok")
+
     # compounding cap follows the account value minus $2, within [5, COMPOUND_MAX]
     assert lr.compound_cap(59.8, 52) == 57.8
     assert lr.compound_cap(3.0, 52) == 5.0

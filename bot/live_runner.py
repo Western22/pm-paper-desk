@@ -489,6 +489,12 @@ class Executor:
                 self.stats["placed"] += 1
             else:
                 self.stats["rejected"] += 1
+                # a SELL right after a fill fails until the trade settles — expected and retried, not news
+                if o["side"] == "SELL" and "balance" in str(
+                    getattr(r, "message", "")
+                ) + str(getattr(r, "code", "")):
+                    self.stats["unsettled"] = self.stats.get("unsettled", 0) + 1
+                    continue
                 log(
                     "  REJECTED",
                     o["side"],
@@ -597,11 +603,25 @@ class Executor:
             "leg": "flatten",
             "taker": True,
         }
+        # a fill is MATCHED before it settles on-chain: until then the shares read as balance 0 and the sell is
+        # rejected (31 Oct: 3 rejections, sold 9 s later by the engine). Retry every 0.75 s for up to 20 s.
         t0 = time.time()
-        async with self.lock:
-            await self.place_batch([o])
+        for attempt in range(27):
+            o["size"] = int(self.pos.get(asset, 0.0))
+            if o["size"] < 5:
+                return
+            rej = self.stats["rejected"]
+            async with self.lock:
+                await self.place_batch([o])
+            if self.stats["rejected"] == rej:
+                log(
+                    f"SELL NOW {o['size']} (limit ≥ {floor:.2f}, filled @ {fill_price}) · {(time.time() - t0) * 1000:.0f} ms"
+                    + (f" · after {attempt} settlement retries" if attempt else "")
+                )
+                return
+            await asyncio.sleep(0.75)
         log(
-            f"SELL NOW {n} (limit ≥ {floor:.2f}, filled @ {fill_price}) · {(time.time() - t0) * 1000:.0f} ms"
+            f"SELL NOW gave up after 20 s for asset …{asset[-6:]} — the engine keeps offering the shares"
         )
 
     async def on_trade(self, p):
@@ -898,7 +918,12 @@ class Executor:
                 )
                 self.have_pos = True
             except Exception as e:  # noqa: BLE001 — positions are retried; orders wait until we have them
-                log("[positions]", e)
+                if (
+                    "429" in str(e)
+                ):  # data-api rate limit: back off quietly, fills still arrive on the stream
+                    await asyncio.sleep(20)
+                else:
+                    log("[positions]", e)
             await self.operator_sells()
             if time.time() - self.last_engine > 30 and self.resting:
                 await self.cancel_all("engine silent > 30 s")

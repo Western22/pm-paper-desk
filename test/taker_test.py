@@ -85,6 +85,32 @@ async def main():
     ), o
     print("executor sell-immediately ok")
 
+    # unsettled shares: first two sells rejected (balance 0), third goes through
+    ex4 = lr.Executor()
+    ex4.send = send
+    ex4.markets = []
+    ex4.pos = {"N": 9.0}
+    tries = []
+
+    async def place4(orders):
+        tries.append(orders[0]["size"])
+        if len(tries) <= 2:
+            ex4.stats["rejected"] += 1
+
+    ex4.place_batch = place4
+    lr_sleep = asyncio.sleep
+
+    async def fast_sleep(s):
+        await lr_sleep(0)
+
+    lr.asyncio.sleep = fast_sleep
+    try:
+        await ex4.flatten_now("N", 0.40)
+    finally:
+        lr.asyncio.sleep = lr_sleep
+    assert tries == [9, 9, 9], tries
+    print("settlement retry ok")
+
     # compounding cap follows the account value minus $2, within [5, COMPOUND_MAX]
     assert lr.compound_cap(59.8, 52) == 57.8
     assert lr.compound_cap(3.0, 52) == 5.0

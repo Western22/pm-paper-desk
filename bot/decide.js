@@ -83,6 +83,21 @@ function flattenOrders(ms, orders, held, flat, bestBid) {
   return out;
 }
 
+/** The live book with OUR resting quote taken out. Polymarket's book per YES token is unified (our NO buys show
+ *  up as YES asks), so without this the engine sees its own order as competition and — in a thin book where
+ *  ours is the best bid — as a "mid jump" the moment it posts, and pulls itself (31 Oct: every new market
+ *  self-pulled 3–22¢ seconds after POST and sat out 6 h). `b`: { bids: Map(price→size), asks: Map, ... }. */
+function withoutOurs(b, q) {
+  if (!b || !q) return b;
+  const cut = (m, price, size) => {
+    if (!(size > 0)) return m;
+    const out = new Map(m);
+    for (const [p, z] of m) if (Math.abs(p - price) < 1e-6) { const left = z - size; if (left > 1e-9) out.set(p, left); else out.delete(p); }
+    return out;
+  };
+  return Object.assign({}, b, { bids: cut(b.bids, q.bid, q.bs), asks: cut(b.asks, q.ask, q.as) });
+}
+
 async function main() {
   const statePath = process.argv[2] || 'live-state.json';
   const input = readStdin();
@@ -113,4 +128,4 @@ async function main() {
 }
 if (require.main === module) main().catch(e => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) }) + '\n'); process.exit(1); });
 
-module.exports = { ordersFor, exitOnly, takeProfit, flattenOrders };
+module.exports = { ordersFor, exitOnly, takeProfit, flattenOrders, withoutOurs };

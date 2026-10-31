@@ -14,7 +14,7 @@ const readline = require('readline');
 const E = require(path.join(__dirname, '..', 'lib', 'paper-engine.js'));
 const Q = require(path.join(__dirname, '..', 'engine.js'));
 const Core = require(path.join(__dirname, '..', 'paper.js'));
-const { ordersFor, exitOnly, takeProfit, flattenOrders } = require(path.join(__dirname, 'decide.js'));
+const { ordersFor, exitOnly, takeProfit, flattenOrders, withoutOurs } = require(path.join(__dirname, 'decide.js'));
 let winners = new Map(); const tpLogged = new Map();
 // sell-immediately: token → { price, at } for shares a BUY fill just gave us (FLATTEN=0 turns it off)
 const FLATTEN = process.env.FLATTEN !== '0';
@@ -41,6 +41,11 @@ const info = msg => out({ type: 'info', msg });
 let s;
 try { s = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (e) { s = E.freshState(50); s.running = true; s.startedAt = Date.now(); }
 s.P.live = true;
+// one-time: clear the 6 h pulls our own orders caused before the book excluded them (see withoutOurs)
+if (!s.selfPullFix) {
+  for (const ms of Object.values(s.markets || {})) { ms.coolUntil = 0; if (ms.status === 'GATED') ms.status = 'IDLE'; }
+  s.eventCool = {}; s.selfPullFix = true;
+}
 // fill cost to plan with until live fills recalibrate it: 30 Oct real fills averaged ~9¢/share adverse
 if (s.P.liveMarkoutC == null) s.P.liveMarkoutC = +(process.env.LIVE_MARKOUT_C || 9);
 s.P.tickSec = TICK_MS / 1000;
@@ -80,7 +85,7 @@ function asBook(b) {
 }
 function getBook(ms) {
   const b = books.get(String(ms.meta.tokens[0].id));
-  return b && Date.now() - b.at < BOOK_STALE_MS ? asBook(b) : undefined;
+  return b && Date.now() - b.at < BOOK_STALE_MS ? asBook(withoutOurs(b, ms.quote)) : undefined; // others' orders only
 }
 
 /** Fast path: on every book change, pull a market's orders at once if the mid ran away from where we quoted. */
@@ -88,7 +93,7 @@ function dangerCheck(tok) {
   const id = tokenIdx.get(tok); const ms = id && s.markets[id]; const b = books.get(tok);
   if (!ms || !ms.quote || !b || ms.lastMid == null) return;
   // same size-adjusted mid as the engine and Polymarket's reward scoring (dust orders don't move it)
-  const comp = Q.competition(asBook(b), ms.meta.v, ms.meta.minSize); if (!comp) return;
+  const comp = Q.competition(asBook(withoutOurs(b, ms.quote)), ms.meta.v, ms.meta.minSize); if (!comp) return;
   const bb = comp.bestBid ?? 0, ba = comp.bestAsk ?? 1;
   const mid = comp.mid, move = Math.abs(mid - ms.lastMid) * 100;
   const lim = Math.max(1.5, 0.4 * ms.meta.v); // same jump threshold as the engine's shock gate

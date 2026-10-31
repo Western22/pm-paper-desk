@@ -120,3 +120,21 @@ console.log('guards ok');
   assert.strictEqual(flattenOrders(ms, orders, { FN: 21 }, flat, () => 0), orders);
   console.log('sell-immediately ok');
 }
+
+// 8) our own quote is not competition and not a "mid jump": thin book where ours is the best bid
+{
+  const { withoutOurs } = require('../bot/decide.js');
+  const Q = require('../engine.js');
+  const toBook = b => ({ tick_size: '0.01', bids: [...b.bids].sort((a, c) => c[0] - a[0]).map(([p, z]) => ({ price: String(p), size: String(z) })), asks: [...b.asks].sort((a, c) => a[0] - c[0]).map(([p, z]) => ({ price: String(p), size: String(z) })) });
+  const others = { bids: new Map([[0.30, 50]]), asks: new Map([[0.70, 50]]) };
+  const q = { bid: 0.46, bs: 21, ask: 0.54, as: 0 };
+  const withMe = { bids: new Map([[0.30, 50], [0.46, 21]]), asks: new Map([[0.70, 50]]) };
+  const m0 = Q.competition(toBook(others), 3.5, 20).mid, m1 = Q.competition(toBook(withMe), 3.5, 20).mid, m2 = Q.competition(toBook(withoutOurs(withMe, q)), 3.5, 20).mid;
+  assert(Math.abs(m1 - m0) > 0.02, `our order moves the raw mid (${m0} → ${m1})`);
+  assert.strictEqual(m2, m0, 'mid without ours is unchanged');
+  // someone else at our price keeps their part
+  const shared = withoutOurs({ bids: new Map([[0.46, 30]]), asks: new Map() }, q);
+  assert.strictEqual(shared.bids.get(0.46), 9);
+  assert.strictEqual(withoutOurs(withMe, null), withMe);
+  console.log('own-order exclusion ok');
+}

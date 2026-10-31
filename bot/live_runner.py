@@ -527,6 +527,44 @@ class Executor:
         self.stats["fills"] += 1
         return True
 
+    async def operator_sells(self):
+        """Sell on request: put words from a market's title in /opt/pm-desk/run/sell.txt (one per line, or ALL);
+        every held position whose title matches is sold now at the best bids (floor: current price − 6¢)."""
+        f = Path(os.environ.get("SELL_FILE", STATE.parent / "sell.txt"))
+        if not f.exists():
+            return
+        words = [w.strip().lower() for w in f.read_text().splitlines() if w.strip()]
+        f.replace(f.with_suffix(".done"))
+        hits = [
+            r
+            for r in POSITION_ROWS
+            if r["size"] >= 5
+            and any(w == "all" or w in str(r.get("title") or "").lower() for w in words)
+        ]
+        if not hits:
+            log(f"[sell] nothing held matches {words}")
+            return
+        self.manual = getattr(self, "manual", {})
+        for r in hits:
+            n = int(self.pos.get(r["asset"], r["size"]))
+            floor = max(0.01, math.floor((r["cur"] - FLATTEN_SLIP_C / 100) * 100) / 100)
+            o = {
+                "token": r["asset"],
+                "side": "SELL",
+                "price": floor,
+                "size": n,
+                "market": "",
+                "question": r.get("title") or "",
+                "leg": "manual",
+                "taker": True,
+            }
+            async with self.lock:
+                await self.place_batch([o])
+            self.manual[key(o)] = time.time()
+            log(
+                f"[sell] {n} × {str(r.get('title'))[:50]} {r.get('outcome')} · limit ≥ {floor:.2f} (now {r['cur']}, cost {r['avg']})"
+            )
+
     def flatten_soon(self, asset, fill_price):
         """Fire-and-forget sell of everything held in `asset` (one in flight per asset)."""
         self.flattening = getattr(self, "flattening", set())
@@ -681,7 +719,14 @@ class Executor:
             return
         want = {key(o): o for o in orders}
         async with self.lock:
-            stale = [k for k in self.resting if k not in want]
+            manual = getattr(
+                self, "manual", {}
+            )  # operator sell orders: the engine doesn't know them, keep 10 min
+            stale = [
+                k
+                for k in self.resting
+                if k not in want and time.time() - manual.get(k, 0) > 600
+            ]
             new = [o for k, o in want.items() if k not in self.resting]
             if not stale and not new:
                 return
@@ -854,6 +899,7 @@ class Executor:
                 self.have_pos = True
             except Exception as e:  # noqa: BLE001 — positions are retried; orders wait until we have them
                 log("[positions]", e)
+            await self.operator_sells()
             if time.time() - self.last_engine > 30 and self.resting:
                 await self.cancel_all("engine silent > 30 s")
             if time.time() - last_rec > RECONCILE_SEC:

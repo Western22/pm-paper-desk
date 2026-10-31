@@ -92,5 +92,49 @@ async def main():
     assert lr.compound_cap(10_000, 52) == lr.COMPOUND_MAX
     print("compound ok")
 
+    # operator sell: "altman" in sell.txt → the 25 Altman YES are sold (limit ≥ cur − 6¢); file consumed
+    import os
+    import tempfile
+
+    d = pathlib.Path(tempfile.mkdtemp())
+    os.environ["SELL_FILE"] = str(d / "sell.txt")
+    (d / "sell.txt").write_text("Altman\n")
+    lr.POSITION_ROWS[:] = [
+        {
+            "asset": "A1",
+            "title": "Will Trump meet with Sam Altman by November 30, 2026?",
+            "outcome": "Yes",
+            "size": 25.0,
+            "avg": 0.36,
+            "cur": 0.41,
+            "pnl": 1.25,
+        },
+        {
+            "asset": "B1",
+            "title": "Will BTC close above $120k?",
+            "outcome": "No",
+            "size": 20.0,
+            "avg": 0.5,
+            "cur": 0.5,
+            "pnl": 0.0,
+        },
+    ]
+    ex3 = lr.Executor()
+    ex3.pos = {"A1": 25.0, "B1": 20.0}
+    sold = []
+
+    async def place3(orders):
+        sold.extend(orders)
+
+    ex3.place_batch = place3
+    await ex3.operator_sells()
+    assert [(o["token"], o["side"], o["size"], o["price"]) for o in sold] == [
+        ("A1", "SELL", 25, 0.35)
+    ], sold
+    assert not (d / "sell.txt").exists() and (d / "sell.done").exists()
+    k = lr.key(sold[0])
+    assert k in ex3.manual, "kept away from the engine's stale-order cancel"
+    print("operator sell ok")
+
 
 asyncio.run(main())

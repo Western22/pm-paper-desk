@@ -37,6 +37,7 @@ import asyncio
 import collections
 import contextlib
 import json
+import math
 import os
 import signal
 import sys
@@ -48,6 +49,14 @@ from pathlib import Path
 LIVE = os.environ.get("LIVE") == "1"
 WALLET = os.environ.get("POLYMARKET_WALLET_ADDRESS", "")
 MAX_USDC = float(os.environ.get("LIVE_MAX_USDC", "50"))
+# compounding: the cap follows the account's real value (cash + positions − $2 buffer), so rewards and banked
+# gains go back to work the same day and losses shrink the book. COMPOUND_MAX is a hard ceiling.
+COMPOUND = os.environ.get("COMPOUND", "1") != "0"
+COMPOUND_MAX = float(os.environ.get("COMPOUND_MAX", "500"))
+# sell-immediately in the executor itself (no engine round-trip): after a BUY fill, sell the shares at once
+# with a marketable limit no lower than fill price − FLATTEN_SLIP_C (it executes at the best bids above that)
+FLATTEN = os.environ.get("FLATTEN", "1") != "0"
+FLATTEN_SLIP_C = float(os.environ.get("FLATTEN_SLIP_C", "6"))
 MAX_LOSS = float(os.environ.get("MAX_LOSS_USDC", "15"))
 MAX_MARKETS = int(os.environ.get("MAX_MARKETS", "8"))
 # diversify: no market gets more than this share of capital (0 = let the optimiser concentrate)
@@ -176,6 +185,13 @@ def summarize_account(value_rows, activity, cash=None, net_deposits=0.0, now=Non
             for a in activity[:30]
         ],
     }
+
+
+def compound_cap(total, current, buffer=2.0):
+    """New cap from the account's value, or None when compounding is off / value unknown."""
+    if not COMPOUND or total is None:
+        return None
+    return round(max(5.0, min(COMPOUND_MAX, total - buffer)), 2)
 
 
 def parse_cash(r):
@@ -511,6 +527,45 @@ class Executor:
         self.stats["fills"] += 1
         return True
 
+    def flatten_soon(self, asset, fill_price):
+        """Fire-and-forget sell of everything held in `asset` (one in flight per asset)."""
+        self.flattening = getattr(self, "flattening", set())
+        if asset in self.flattening:
+            return
+        self.flattening.add(asset)
+        task = asyncio.create_task(self.flatten_now(asset, fill_price))
+        task.add_done_callback(lambda _t: self.flattening.discard(asset))
+
+    async def flatten_now(self, asset, fill_price):
+        """Sell the shares a fill just gave us, now: a SELL limit at fill − slip executes against the best bids
+        (CLOB gives the taker the makers' prices), so the real price is usually the bid, 1–3¢ under the fill."""
+        await asyncio.sleep(
+            0.05
+        )  # let partial-fill messages for the same order land first
+        n = int(self.pos.get(asset, 0.0))
+        if n < 5:
+            return
+        floor = max(0.01, math.floor((fill_price - FLATTEN_SLIP_C / 100) * 100) / 100)
+        m = next(
+            (m for m in self.markets or [] if asset in (m.get("tokens") or [])), {}
+        )
+        o = {
+            "token": asset,
+            "side": "SELL",
+            "price": floor,
+            "size": n,
+            "market": m.get("id", ""),
+            "question": m.get("q", "") or "",
+            "leg": "flatten",
+            "taker": True,
+        }
+        t0 = time.time()
+        async with self.lock:
+            await self.place_batch([o])
+        log(
+            f"SELL NOW {n} (limit ≥ {floor:.2f}, filled @ {fill_price}) · {(time.time() - t0) * 1000:.0f} ms"
+        )
+
     async def on_trade(self, p):
         if str(_attr(p, "status", default="")).upper() not in (
             "MATCHED",
@@ -530,6 +585,11 @@ class Executor:
             ):
                 self.seen_fills.add(tag)
                 hit = True
+                if FLATTEN and str(_attr(mo, "side", default="")).upper() == "BUY":
+                    with contextlib.suppress(TypeError, ValueError):
+                        self.flatten_soon(
+                            str(_attr(mo, "asset_id")), float(_attr(mo, "price"))
+                        )
                 # engine measures the adverse move after each fill to calibrate the fill cost it plans with
                 with contextlib.suppress(TypeError, ValueError):
                     await self.send(
@@ -728,6 +788,18 @@ class Executor:
             )
         return None
 
+    async def compound(self):
+        """Cap = real account value − $2 (rewards and banked gains go straight back to work; losses shrink it)."""
+        global MAX_USDC
+        cap = compound_cap(ACCOUNT.get("total"), MAX_USDC)
+        if cap is None or abs(cap - MAX_USDC) < 1:
+            return
+        log(
+            f"[compound] cap ${MAX_USDC:.2f} → ${cap:.2f} (account ${ACCOUNT['total']:.2f})"
+        )
+        MAX_USDC = cap
+        await self.send({"type": "config", "capital": MAX_USDC})
+
     async def account_loop(self):
         """Every 60 s: the account exactly as Polymarket reports it, for the live page."""
         while not self.stop.is_set():
@@ -748,6 +820,7 @@ class Executor:
                             NET_DEPOSITS,
                         )
                     )
+                    await self.compound()
                 except Exception as e:  # noqa: BLE001 — the page just shows the previous snapshot
                     log("[account]", e)
             with contextlib.suppress(asyncio.TimeoutError):

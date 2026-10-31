@@ -47,5 +47,50 @@ async def main():
     assert ex.pos["Y"] == 0.0
     print("taker ok")
 
+    # maker BUY fill of 21 NO @0.46 → executor itself sells 21 at once with a limit ≥ 0.40 (6¢ slip floor)
+    ex2 = lr.Executor()
+    ex2.send = send
+    ex2.markets = [{"id": "m1", "q": "Russian diesel", "tokens": ["N", "Y2"]}]
+    ex2.resting = {("N", "BUY", 0.46, 21): {"id": "b1", "market": "m1", "token": "N"}}
+    placed = []
+
+    async def place_batch(orders):
+        placed.extend(orders)
+
+    ex2.place_batch = place_batch
+    fill = {
+        "id": "t10",
+        "status": "MATCHED",
+        "maker_orders": [
+            {
+                "order_id": "b1",
+                "asset_id": "N",
+                "side": "BUY",
+                "matched_amount": "21",
+                "price": "0.46",
+            }
+        ],
+    }
+    await ex2.on_trade(fill)
+    await asyncio.sleep(0.2)
+    assert len(placed) == 1, placed
+    o = placed[0]
+    assert (o["token"], o["side"], o["size"], o["price"], o["taker"], o["market"]) == (
+        "N",
+        "SELL",
+        21,
+        0.4,
+        True,
+        "m1",
+    ), o
+    print("executor sell-immediately ok")
+
+    # compounding cap follows the account value minus $2, within [5, COMPOUND_MAX]
+    assert lr.compound_cap(59.8, 52) == 57.8
+    assert lr.compound_cap(3.0, 52) == 5.0
+    assert lr.compound_cap(None, 52) is None
+    assert lr.compound_cap(10_000, 52) == lr.COMPOUND_MAX
+    print("compound ok")
+
 
 asyncio.run(main())

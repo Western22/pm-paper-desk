@@ -514,6 +514,7 @@ class Executor:
             except Exception as e:  # noqa: BLE001 — last resort: tell the operator
                 log("cancel_all FAILED — check open orders on polymarket.com:", e)
         self.resting.clear()
+        await self.report_resting()
 
     # ------------------------------------------------------------ own fills (user channel)
     def apply_fill(self, order_id, asset, side, amount):
@@ -566,6 +567,7 @@ class Executor:
             }
             async with self.lock:
                 await self.place_batch([o])
+            await self.report_resting()
             self.manual[key(o)] = time.time()
             log(
                 f"[sell] {n} × {str(r.get('title'))[:50]} {r.get('outcome')} · limit ≥ {floor:.2f} (now {r['cur']}, cost {r['avg']})"
@@ -613,6 +615,7 @@ class Executor:
             rej = self.stats["rejected"]
             async with self.lock:
                 await self.place_batch([o])
+            await self.report_resting()
             if self.stats["rejected"] == rej:
                 log(
                     f"SELL NOW {o['size']} (limit ≥ {floor:.2f}, filled @ {fill_price}) · {(time.time() - t0) * 1000:.0f} ms"
@@ -680,6 +683,7 @@ class Executor:
                 )
         if hit:
             t0 = time.time()
+            await self.report_resting()
             await self.send(
                 {"type": "positions", "pos": self.pos, "kick": True}
             )  # engine requotes in ~150 ms
@@ -718,6 +722,7 @@ class Executor:
         for k in ks:
             self.resting.pop(k, None)
         lat = (time.time() * 1000 - m["t"]), (time.time() - t_recv) * 1000
+        await self.report_resting()
         self.stats["pulls"] += 1
         self.stats["pull_ms"].append(lat[0])
         log(
@@ -769,6 +774,15 @@ class Executor:
                 log(
                     f"   [dry] {o['side']:<4} {o['size']:>4} @ {o['price']:.3f} [{o['leg']}] {o['question'][:50]}"
                 )
+        await self.report_resting()
+
+    async def report_resting(self):
+        """Tell the engine exactly which orders are ours, so it reads the book without them."""
+        cur = sorted([k[0], k[1], k[2], k[3]] for k in self.resting)
+        if cur != getattr(self, "_reported", None):
+            self._reported = cur
+            with contextlib.suppress(Exception):
+                await self.send({"type": "resting", "orders": cur})
 
     async def read_engine(self):
         while not self.stop.is_set():

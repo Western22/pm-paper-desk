@@ -124,6 +124,25 @@ function queueShield(q, others, mid, v, tick = 0.01, k = 2, maxSteps = 3) {
   return out;
 }
 
+/** Same idea as withoutOurs, but from the orders the executor CONFIRMS are resting (token, side, price, size),
+ *  mapped onto the unified YES book (NO buy @p = YES ask @1−p, NO sell @p = YES bid @1−p). An order is only
+ *  removed once the book visibly holds at least its size at that price — a just-posted order the feed hasn't shown
+ *  yet, or another maker at our price, is never eaten. This stops the post/cancel flicker that read as a 1–3¢
+ *  "jump" in thin books and tripped the volatility gate on every POST (31 Oct evening). */
+function withoutResting(b, resting, yes, no) {
+  if (!b || !resting || !resting.length) return b;
+  const bids = new Map(b.bids), asks = new Map(b.asks);
+  const take = (m, p, z) => {
+    for (const [x, have] of m) if (Math.abs(x - p) < 1e-6) { if (have >= z * 0.99) { const left = have - z; if (left > 1e-9) m.set(x, left); else m.delete(x); } return; }
+  };
+  for (const [tok, side, price, size] of resting) {
+    const t = String(tok), S = String(side).toUpperCase();
+    if (t === String(yes)) take(S === 'BUY' ? bids : asks, +price, +size);
+    else if (t === String(no)) take(S === 'BUY' ? asks : bids, +(1 - price).toFixed(4), +size);
+  }
+  return Object.assign({}, b, { bids, asks });
+}
+
 async function main() {
   const statePath = process.argv[2] || 'live-state.json';
   const input = readStdin();
@@ -154,4 +173,4 @@ async function main() {
 }
 if (require.main === module) main().catch(e => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) }) + '\n'); process.exit(1); });
 
-module.exports = { ordersFor, exitOnly, takeProfit, flattenOrders, withoutOurs, queueShield };
+module.exports = { ordersFor, exitOnly, takeProfit, flattenOrders, withoutOurs, withoutResting, queueShield };

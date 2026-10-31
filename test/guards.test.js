@@ -167,3 +167,18 @@ console.log('guards ok');
   assert.strictEqual(E.applyMarkout(s.markets.O.model, { live: true, liveMarkoutC: 9 }).markout, 16);
   console.log('per-market toxicity ok');
 }
+
+// 11) confirmed-resting subtraction: only once the feed shows our size; NO orders map onto the YES book
+{
+  const { withoutResting } = require('../bot/decide.js');
+  const book = { bids: new Map([[0.46, 21], [0.30, 50]]), asks: new Map([[0.75, 27], [0.80, 40]]) };
+  const ours = [['Y', 'BUY', 0.46, 21], ['N', 'BUY', 0.25, 27]]; // NO buy @0.25 = YES ask @0.75
+  const o = withoutResting(book, ours, 'Y', 'N');
+  assert(!o.bids.has(0.46) && !o.asks.has(0.75) && o.bids.get(0.30) === 50 && o.asks.get(0.80) === 40, JSON.stringify([...o.bids, ...o.asks]));
+  // just posted, feed not updated yet (level smaller than our size) → nothing removed
+  const early = withoutResting({ bids: new Map([[0.46, 5]]), asks: new Map() }, [['Y', 'BUY', 0.46, 21]], 'Y', 'N');
+  assert.strictEqual(early.bids.get(0.46), 5);
+  // another maker at our price keeps their share
+  assert.strictEqual(withoutResting({ bids: new Map([[0.46, 30]]), asks: new Map() }, [['Y', 'BUY', 0.46, 21]], 'Y', 'N').bids.get(0.46), 9);
+  console.log('confirmed-resting exclusion ok');
+}

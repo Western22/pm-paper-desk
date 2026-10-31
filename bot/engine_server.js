@@ -14,7 +14,10 @@ const readline = require('readline');
 const E = require(path.join(__dirname, '..', 'lib', 'paper-engine.js'));
 const Q = require(path.join(__dirname, '..', 'engine.js'));
 const Core = require(path.join(__dirname, '..', 'paper.js'));
-const { ordersFor, exitOnly, takeProfit, flattenOrders, withoutOurs, queueShield } = require(path.join(__dirname, 'decide.js'));
+const { ordersFor, exitOnly, takeProfit, flattenOrders, withoutResting, queueShield } = require(path.join(__dirname, "decide.js"));
+// our confirmed resting orders, reported by the executor after every change: [[token, side, price, size], …]
+let ourResting = [];
+const othersOnly = (b, ms) => withoutResting(b, ourResting, ms.meta.tokens[0].id, ms.meta.tokens[1].id);
 const SHIELD = process.env.SHIELD === '1', SHIELD_K = +(process.env.SHIELD_K || 2); // opt-in: thin reward books rarely have size ahead (31 Oct probe: 0 of 11 markets quotable at K=2)
 const shieldLogged = new Map();
 let winners = new Map(); const tpLogged = new Map();
@@ -87,7 +90,7 @@ function asBook(b) {
 }
 function getBook(ms) {
   const b = books.get(String(ms.meta.tokens[0].id));
-  return b && Date.now() - b.at < BOOK_STALE_MS ? asBook(withoutOurs(b, ms.restQuote || ms.quote)) : undefined; // others' orders only
+  return b && Date.now() - b.at < BOOK_STALE_MS ? asBook(othersOnly(b, ms)) : undefined; // others' orders only
 }
 
 /** Fast path: on every book change, pull a market's orders at once if the mid ran away from where we quoted. */
@@ -95,7 +98,7 @@ function dangerCheck(tok) {
   const id = tokenIdx.get(tok); const ms = id && s.markets[id]; const b = books.get(tok);
   if (!ms || !ms.quote || !b || ms.lastMid == null) return;
   // same size-adjusted mid as the engine and Polymarket's reward scoring (dust orders don't move it)
-  const comp = Q.competition(asBook(withoutOurs(b, ms.restQuote || ms.quote)), ms.meta.v, ms.meta.minSize); if (!comp) return;
+  const comp = Q.competition(asBook(othersOnly(b, ms)), ms.meta.v, ms.meta.minSize); if (!comp) return;
   const bb = comp.bestBid ?? 0, ba = comp.bestAsk ?? 1;
   const mid = comp.mid, move = Math.abs(mid - ms.lastMid) * 100;
   const lim = Math.max(1.5, 0.4 * ms.meta.v); // same jump threshold as the engine's shock gate
@@ -168,6 +171,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     winners = new Map((m.winners || []).map(w => [String(w.asset), +w.avg]));
     if (m.kick) kick(); // kick: a fill just happened
   }
+  if (m.type === 'resting') ourResting = Array.isArray(m.orders) ? m.orders : [];
   if (m.type === 'fill') {
     E.recordFill(s, m, Date.now());
     if (FLATTEN && String(m.side).toUpperCase() === 'BUY') { flat.set(String(m.asset), { price: +m.price, at: Date.now() }); kick(); }
@@ -202,7 +206,7 @@ async function tick() {
       const raw = books.get(yes);
       if (SHIELD && ms.quote && Math.abs(ms.inv) < 5 && raw && Date.now() - raw.at < BOOK_STALE_MS && ms.lastMid != null) {
         const before = ms.quote;
-        ms.quote = queueShield(before, withoutOurs(raw, ms.restQuote || before), ms.lastMid, ms.meta.v, ms.meta.tick || 0.01, SHIELD_K);
+        ms.quote = queueShield(before, othersOnly(raw, ms), ms.lastMid, ms.meta.v, ms.meta.tick || 0.01, SHIELD_K);
         if ((before.bs > 0 && !ms.quote.bs) || (before.as > 0 && !ms.quote.as) || before.bid !== ms.quote.bid || before.ask !== ms.quote.ask) {
           const k = `${id}:${ms.quote.bid}/${ms.quote.bs}:${ms.quote.ask}/${ms.quote.as}`;
           if (shieldLogged.get(id) !== k) { shieldLogged.set(id, k); E.log(s, `[${ms.meta.question.slice(0, 28)}] SHIELD — bid ${before.bid}→${ms.quote.bs ? ms.quote.bid : 'off'} · ask ${before.ask}→${ms.quote.as ? ms.quote.ask : 'off'} (need ${SHIELD_K}× our size ahead)`, 'g'); }

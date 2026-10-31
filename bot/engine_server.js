@@ -15,7 +15,7 @@ const E = require(path.join(__dirname, '..', 'lib', 'paper-engine.js'));
 const Q = require(path.join(__dirname, '..', 'engine.js'));
 const Core = require(path.join(__dirname, '..', 'paper.js'));
 const { ordersFor, exitOnly, takeProfit, flattenOrders, withoutOurs, queueShield } = require(path.join(__dirname, 'decide.js'));
-const SHIELD = process.env.SHIELD !== '0', SHIELD_K = +(process.env.SHIELD_K || 2); // others' size ahead ≥ K× ours
+const SHIELD = process.env.SHIELD === '1', SHIELD_K = +(process.env.SHIELD_K || 2); // opt-in: thin reward books rarely have size ahead (31 Oct probe: 0 of 11 markets quotable at K=2)
 const shieldLogged = new Map();
 let winners = new Map(); const tpLogged = new Map();
 // sell-immediately: token → { price, at } for shares a BUY fill just gave us (FLATTEN=0 turns it off)

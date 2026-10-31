@@ -61,6 +61,17 @@ MAX_LOSS = float(os.environ.get("MAX_LOSS_USDC", "15"))
 MAX_MARKETS = int(os.environ.get("MAX_MARKETS", "8"))
 # diversify: no market gets more than this share of capital (0 = let the optimiser concentrate)
 SPREAD_FRAC = float(os.environ.get("SPREAD_FRAC", "0.3"))
+# optional engine overrides, e.g. GATE=3.5 (volatility-gate ratio: higher = fewer pulls) or COOLDOWN_MIN=10
+ENGINE_PARAMS = {
+    k: float(os.environ[e])
+    for k, e in (
+        ("gate", "GATE"),
+        ("cooldownMin", "COOLDOWN_MIN"),
+        ("bigJumpC", "BIG_JUMP_C"),
+        ("eventCoolMin", "EVENT_COOL_MIN"),
+    )
+    if os.environ.get(e)
+}
 # holdings poll; fills arrive instantly on the user stream, so 10 s is plenty (5 s hit data-api 429s)
 POS_SEC = float(os.environ.get("POS_SEC", "10"))
 RECONCILE_SEC = 60.0
@@ -966,7 +977,10 @@ class Executor:
             {
                 "type": "config",
                 "capital": MAX_USDC,
-                "params": {"maxMarkets": MAX_MARKETS, "spreadFrac": SPREAD_FRAC},
+                "params": dict(
+                    {"maxMarkets": MAX_MARKETS, "spreadFrac": SPREAD_FRAC},
+                    **ENGINE_PARAMS,
+                ),
             }
         )
         tasks = [

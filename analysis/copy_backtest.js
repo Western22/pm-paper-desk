@@ -15,6 +15,7 @@ const log = (...a) => process.stderr.write(a.join(' ') + '\n');
 const pool = async (items, n, fn) => { let i = 0; const out = []; await Promise.all(Array.from({ length: n }, async () => { while (i < items.length) { const k = i++; try { out[k] = await fn(items[k]); } catch (e) { out[k] = null; } } })); return out; };
 
 async function candidates() {
+  if (process.env.POOL === 'markets') return poolFromSeptemberMarkets();
   const seen = new Map();
   for (const p of ['ALL', 'MONTH', 'WEEK']) {
     for (const off of [0, 50]) {
@@ -23,6 +24,23 @@ async function candidates() {
     }
   }
   return [...seen.entries()].map(([w, name]) => ({ w, name }));
+}
+
+/** Unbiased pool: today's leaderboards already know who won in October, so instead take the biggest traders in
+ *  the highest-volume markets that ENDED IN SEPTEMBER — chosen with no October information at all. */
+async function poolFromSeptemberMarkets() {
+  const ms = [];
+  for (let off = 0; off < 300; off += 100) {
+    const r = await getJSON(`${GAMMA}/markets?closed=true&limit=100&offset=${off}&order=volumeNum&ascending=false&end_date_min=2026-09-01T00:00:00Z&end_date_max=2026-09-30T23:59:59Z`, {}, 30000).catch(() => []);
+    ms.push(...(r || []).filter(m => !/up-or-down|updown/i.test(m.slug || '')));
+  }
+  const vol = new Map();
+  await pool(ms.slice(0, 150), 6, async m => {
+    const tr = await getJSON(`${DATA}/trades?market=${m.conditionId}&limit=500&takerOnly=false`, {}, 20000).catch(() => []);
+    for (const x of tr || []) if (+x.timestamp < PRIOR[1]) vol.set(x.proxyWallet, (vol.get(x.proxyWallet) || 0) + (+x.size * +x.price || 0));
+  });
+  log(`pool: ${ms.length} September markets → ${vol.size} wallets`);
+  return [...vol.entries()].sort((a, b) => b[1] - a[1]).slice(0, 300).map(([w]) => ({ w, name: w.slice(0, 10) }));
 }
 
 /** September record from closed positions (sorted newest first). */

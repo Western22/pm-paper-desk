@@ -12,3 +12,4 @@ analysis/favorite_backtest.txt
 analysis/copy_backtest.json
 analysis/copy_backtest.txt
 analysis/copy_backtest.log
+analysis/copy_backtest_leaderboard.txt

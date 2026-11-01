@@ -32,6 +32,7 @@
     <button data-v="paper"><span class="n">05</span>Paper Live</button>
     <button data-v="exec"><span class="n">06</span>Execution</button>
     <button data-v="wallets"><span class="n">07</span>Wallets</button>
+    <button data-v="underdog"><span class="n">08</span>Underdog</button>
   </nav>
 
   <!-- 01 SCANNER -->
@@ -165,6 +166,22 @@
     <div id="wlBody"></div>
   </section>
 
+  <!-- 08 UNDERDOG (paper forward-test) -->
+  <section class="view" id="v-underdog">
+    <div class="panel" style="margin-bottom:14px"><div class="ph"><h3>Underdog forward-test — paper, real prices</h3><span class="sp"></span><span class="dim mono" id="udAsOf" style="font-size:11px">loading…</span></div>
+      <div class="pb dim" style="font-size:12px;line-height:1.6">Backtest (10,116 resolved markets): buying the 10–40¢ underdog about a day before the end returned <b class="pos">+11…+19% per bet</b>, mostly in sports. This tab tests it forward: every 30 min the runner finds sports markets ending in 18–30 h, takes the underdog's <b>real ask from the order book</b> (10–40¢, spread ≤ 4¢, ≥ $1 on offer), records a $1 paper bet and settles it at resolution. No orders are sent. Expect to lose ~2 bets in 3 and streaks of 15–20 losses; judge it after 200+ settled bets.</div></div>
+    <div class="grid g-kpi" style="margin-bottom:14px">
+      <div class="panel kpi"><label>Paper P&amp;L</label><div class="v" id="udPnl">—</div><div class="s" id="udRoi">—</div></div>
+      <div class="panel kpi"><label>Settled · open</label><div class="v" id="udCount">—</div><div class="s" id="udBets">—</div></div>
+      <div class="panel kpi"><label>Win rate vs price</label><div class="v" id="udWin">—</div><div class="s" id="udExp">edge = win rate above the average price paid</div></div>
+      <div class="panel kpi"><label>Worst losing streak · drawdown</label><div class="v" id="udStreak">—</div><div class="s" id="udDd">—</div></div>
+    </div>
+    <div class="grid g-2">
+      <div class="panel"><div class="ph"><h3>Bets</h3></div><div class="pb scroll" style="max-height:480px"><table class="tbl"><thead><tr><th>Placed</th><th>Market</th><th>Side</th><th>Price</th><th>Status</th><th>P&amp;L</th></tr></thead><tbody id="udRows"></tbody></table></div></div>
+      <div class="panel"><div class="ph"><h3>Runner log</h3></div><div class="pb scroll mono" id="udLog" style="max-height:480px;font-size:11px;line-height:1.6"></div></div>
+    </div>
+  </section>
+
   <!-- 06 EXECUTION -->
   <section class="view" id="v-exec">
     <div class="panel pipe" style="margin-bottom:14px"><div class="ph"><h3>Production loop</h3></div><div class="pb" id="pipe"></div></div>
@@ -201,5 +218,6 @@
 <script src="/safe.js"></script>
 <script src="/paper.js"></script>
 <script src="/wallets.js"></script>
+<script src="/underdog-tab.js"></script>
 </body>
 </html>

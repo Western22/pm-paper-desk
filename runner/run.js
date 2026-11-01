@@ -9,7 +9,13 @@ const path = require('path');
 const { execSync } = require('child_process');
 const E = require('../lib/paper-engine.js');
 const Peers = require('../lib/peers.js');
-let peersBusy = false, lastPeers = 0;
+const Underdog = require('../lib/underdog.js');
+let peersBusy = false, lastPeers = 0, udBusy = false, lastUd = 0;
+// underdog paper forward-test: own state file next to the ledger, public view for the desk's 08 tab
+const UD_STATE = path.join(__dirname, '..', 'state', 'underdog-state.json');
+const UD_PUBLIC = path.join(__dirname, '..', 'state', 'underdog.json');
+let ud = null;
+function udLoad() { try { ud = JSON.parse(fs.readFileSync(UD_STATE, 'utf8')); } catch (e) { ud = Underdog.fresh(); } }
 
 const ROOT = path.resolve(__dirname, '..');
 const STATE_DIR = path.join(ROOT, 'state');
@@ -106,6 +112,15 @@ async function main() {
         .then(r => { fs.writeFileSync(path.join(STATE_DIR, 'peers.json'), JSON.stringify(r)); E.applyPeerVerdicts(s, r); E.learnMakers(s, r); E.log(s, `PEERS — ${r.markets.length} positions: ${r.markets.filter(m => /other side/.test(m.verdict)).length} with sharp money on the other side`, 'q'); })
         .catch(e => E.log(s, 'PEERS failed: ' + (e.message || e), 'f'))
         .finally(() => { peersBusy = false; });
+    }
+    // underdog forward-test: every 5 min in the background (settles bets; scans for new ones every 30 min)
+    if (!udBusy && Date.now() - lastUd > 5 * 60000) {
+      udBusy = true; lastUd = Date.now();
+      if (!ud) udLoad();
+      Underdog.step(ud)
+        .then(() => { fs.writeFileSync(UD_STATE, JSON.stringify(ud)); fs.writeFileSync(UD_PUBLIC, JSON.stringify(Underdog.publicView(ud))); })
+        .catch(e => console.error('underdog step failed:', e.message || e))
+        .finally(() => { udBusy = false; });
     }
     if (notable || Date.now() - lastSave > SAVE_MS) save(s, notable ? 'event' : 'periodic');
     await sleep(Math.max(1000, s.P.tickSec * 1000 - (Date.now() - started)));

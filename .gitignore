@@ -9,3 +9,6 @@ __pycache__/
 analysis/favorite_backtest.json
 analysis/favorite_backtest.log
 analysis/favorite_backtest.txt
+analysis/copy_backtest.json
+analysis/copy_backtest.txt
+analysis/copy_backtest.log

@@ -182,3 +182,34 @@ console.log('guards ok');
   assert.strictEqual(withoutResting({ bids: new Map([[0.46, 30]]), asks: new Map() }, [['Y', 'BUY', 0.46, 21]], 'Y', 'N').bids.get(0.46), 9);
   console.log('confirmed-resting exclusion ok');
 }
+
+// 12) order-flow guard: book leaning to the bid / net taker buying → no resting ask (and vice versa)
+{
+  const { imbalance, takerFlow, flowGuard } = require('../bot/decide.js');
+  const lean = { bids: new Map([[0.48, 400], [0.47, 50]]), asks: new Map([[0.52, 40]]) };
+  assert(imbalance(lean) > 0.8 && imbalance({ bids: new Map(), asks: new Map() }) === 0);
+  const now0 = Date.now();
+  const tape = [{ t: now0 - 1000, yes: true, side: 'BUY', size: 50 }, { t: now0 - 2000, yes: false, side: 'SELL', size: 30 }, { t: now0 - 20 * 60000, yes: false, side: 'BUY', size: 999 }];
+  assert.strictEqual(takerFlow(tape, now0), 80, 'YES buys + NO sells = upward pressure; old prints ignored');
+  const q = { bid: 0.47, bs: 20, ask: 0.53, as: 20 };
+  assert.deepStrictEqual([flowGuard(q, 0.85, 0, 20).q.bs, flowGuard(q, 0.85, 0, 20).q.as], [20, 0]);
+  assert.deepStrictEqual([flowGuard(q, 0, -70, 20).q.bs, flowGuard(q, 0, -70, 20).q.as], [0, 20]);
+  assert.strictEqual(flowGuard(q, 0.2, 10, 20).why, null);
+  console.log('flow guard ok');
+}
+
+// 13) reward calibration: model said $40, Polymarket paid $4.21 → scale ≈ 0.105; rates follow; no double count
+{
+  const s = E.freshState(52); s.P.live = true; s.predPrev = { day: '2026-10-30', usd: 40 };
+  assert(Math.abs(E.calibrateReward(s, 4.21) - 0.1053) < 1e-3);
+  assert.strictEqual(E.calibrateReward(s, 4.21), null, 'one calibration per day');
+  const meta = E.applyRewardScale({ rate: 50 }, s.P);
+  assert(Math.abs(meta.rate - 50 * s.P.rewardScale) < 1e-9 && meta.rate0 === 50);
+  assert.strictEqual(E.applyRewardScale(meta, s.P).rate, meta.rate, 'idempotent (uses rate0)');
+  // next day's prediction was made with the scale: compare against the UNSCALED model
+  s.predPrev = { day: '2026-10-31', usd: 40 * s.P.rewardScale };
+  E.calibrateReward(s, 4.21);
+  assert(Math.abs(s.P.rewardScale - 0.1053) < 2e-3, 'stable when reality matches: ' + s.P.rewardScale);
+  assert.strictEqual(E.applyRewardScale({ rate: 50 }, { live: false, rewardScale: 0.1 }).rate, 50, 'paper untouched');
+  console.log('reward calibration ok');
+}

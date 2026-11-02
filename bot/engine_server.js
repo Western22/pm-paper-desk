@@ -18,6 +18,9 @@ const { ordersFor, exitOnly, takeProfit, flattenOrders, withoutResting, queueShi
 // our confirmed resting orders, reported by the executor after every change: [[token, side, price, size], …]
 let ourResting = [];
 const othersOnly = (b, ms) => withoutResting(b, ourResting, ms.meta.tokens[0].id, ms.meta.tokens[1].id);
+const { imbalance, takerFlow, flowGuard } = require(path.join(__dirname, 'decide.js'));
+const FLOW = process.env.FLOW_GUARD !== '0', FLOW_TH = +(process.env.FLOW_IMB || 0.6), FLOW_K = +(process.env.FLOW_K || 3);
+const tapes = new Map(), flowLogged = new Map();
 const SHIELD = process.env.SHIELD === '1', SHIELD_K = +(process.env.SHIELD_K || 2); // opt-in: thin reward books rarely have size ahead (31 Oct probe: 0 of 11 markets quotable at K=2)
 const shieldLogged = new Map();
 let winners = new Map(); const tpLogged = new Map();
@@ -139,6 +142,11 @@ function connect() {
         const b = books.get(m.asset_id); if (b) b.tick = +m.new_tick_size;
       } else if (et === 'last_trade_price') {
         const id = anyIdx.get(String(m.asset_id)); const ms = id && s.markets[id];
+        if (ms) { // tape for the taker-flow signal (last 10 min per market)
+          const tape = tapes.get(id) || []; const now = Date.now();
+          tape.push({ t: now, yes: String(m.asset_id) === String(ms.meta.tokens[0].id), side: String(m.side || '').toUpperCase(), size: +m.size || 0 });
+          tapes.set(id, tape.filter(x => now - x.t < 10 * 60000));
+        }
         const why = ms && Core.toxicTrade(ms, { asset: m.asset_id, side: m.side, price: m.price, size: m.size }, s.P);
         if (why) pull(id, 'toxic: ' + why, s.P.toxicCoolMin ?? 5);
       } else if (et === 'market_resolved') {
@@ -172,6 +180,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (m.kick) kick(); // kick: a fill just happened
   }
   if (m.type === 'resting') ourResting = Array.isArray(m.orders) ? m.orders : [];
+  if (m.type === 'rewardPaid' && +m.usd >= 0) E.calibrateReward(s, +m.usd);
   if (m.type === 'fill') {
     E.recordFill(s, m, Date.now());
     if (FLATTEN && String(m.side).toUpperCase() === 'BUY') { flat.set(String(m.asset), { price: +m.price, at: Date.now() }); kick(); }
@@ -202,8 +211,15 @@ async function tick() {
     if (posAt) for (const [id, ms] of Object.entries(s.markets)) {
       const [yes, no] = ms.meta.tokens.map(t => String(t.id));
       const yesHeld = +pos[yes] || 0, noHeld = +pos[no] || 0;
-      // never first in line (flat markets only — with inventory the sell legs must stay where they are)
       const raw = books.get(yes);
+      // order-flow guard: don't rest on the side the book/tape is leaning against (flat markets only)
+      if (FLOW && ms.quote && Math.abs(ms.inv) < 5 && raw && Date.now() - raw.at < BOOK_STALE_MS) {
+        const g = flowGuard(ms.quote, imbalance(othersOnly(raw, ms)), takerFlow(tapes.get(id), Date.now()), ms.meta.minSize, FLOW_TH, FLOW_K);
+        if (g.why && flowLogged.get(id) !== g.why.split(' (')[0]) { flowLogged.set(id, g.why.split(' (')[0]); E.log(s, `[${ms.meta.question.slice(0, 28)}] FLOW — ${g.why}: ${g.q.bs ? '' : 'bid off '}${g.q.as ? '' : 'ask off'}`, 'g'); }
+        if (!g.why) flowLogged.delete(id);
+        ms.quote = g.q;
+      }
+      // never first in line (flat markets only — with inventory the sell legs must stay where they are)
       if (SHIELD && ms.quote && Math.abs(ms.inv) < 5 && raw && Date.now() - raw.at < BOOK_STALE_MS && ms.lastMid != null) {
         const before = ms.quote;
         ms.quote = queueShield(before, othersOnly(raw, ms), ms.lastMid, ms.meta.v, ms.meta.tick || 0.01, SHIELD_K);

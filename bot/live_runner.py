@@ -932,6 +932,22 @@ class Executor:
             )
         return None
 
+    async def report_reward(self, now=None):
+        """Once a day, ≥ 2 h after 00:00 UTC (payouts land just after midnight), tell the engine what Polymarket
+        actually paid for yesterday — 0 if nothing came — so it can calibrate its reward model."""
+        now = now or time.time()
+        day = int(now // 86400)
+        if (
+            now - day * 86400 < 7200
+            or getattr(self, "_reward_day", None) == day
+            or not ACCOUNT.get("at")
+        ):
+            return
+        self._reward_day = day
+        paid = float(ACCOUNT.get("rewardsToday") or 0)
+        log(f"[reward] Polymarket paid ${paid:.2f} for yesterday → engine calibration")
+        await self.send({"type": "rewardPaid", "usd": paid})
+
     async def compound(self):
         """Cap = real account value − $2 (rewards and banked gains go straight back to work; losses shrink it)."""
         global MAX_USDC
@@ -965,6 +981,7 @@ class Executor:
                         )
                     )
                     await self.compound()
+                    await self.report_reward()
                 except Exception as e:  # noqa: BLE001 — the page just shows the previous snapshot
                     log("[account]", e)
             with contextlib.suppress(asyncio.TimeoutError):

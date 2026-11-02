@@ -143,6 +143,33 @@ function withoutResting(b, resting, yes, no) {
   return Object.assign({}, b, { bids, asks });
 }
 
+/** Order-book imbalance at the touch (others' orders only): +1 = all size on the bid (buyers leaning, price
+ *  tends to tick up next), −1 = all on the ask. Lehalle & Mounjid show this imbalance predicts both the next
+ *  move and which resting side gets adversely filled. */
+function imbalance(others) {
+  if (!others) return 0;
+  const top = (m, best) => { let p = null; for (const x of m.keys()) if (p == null || (best === 'max' ? x > p : x < p)) p = x; return p == null ? 0 : m.get(p); };
+  const b = top(others.bids, 'max'), a = top(others.asks, 'min');
+  return b + a > 0 ? (b - a) / (b + a) : 0;
+}
+/** Net taker flow on the YES price over the last `windowMs` (shares): + = aggressive buying of YES. */
+function takerFlow(trades, now, windowMs = 5 * 60000) {
+  let f = 0;
+  for (const t of trades || []) if (now - t.t <= windowMs) f += (t.yes ? 1 : -1) * (t.side === 'BUY' ? 1 : -1) * t.size;
+  return f;
+}
+/** Drop the side that the book or the tape says is about to be picked off: buying pressure (imbalance > th or
+ *  net taker buying > flowK × min size) → no resting ask; selling pressure → no resting bid. */
+function flowGuard(q, imb, flow, minSize, th = 0.6, flowK = 3) {
+  if (!q) return { q, why: null };
+  const up = imb > th || flow > flowK * minSize, down = imb < -th || flow < -flowK * minSize;
+  if (!up && !down) return { q, why: null };
+  const out = Object.assign({}, q);
+  if (up && out.as > 0) out.as = 0;
+  if (down && out.bs > 0) out.bs = 0;
+  return { q: out, why: `${up ? 'buy' : 'sell'} pressure (book ${imb.toFixed(2)}, tape ${Math.round(flow)} sh)` };
+}
+
 async function main() {
   const statePath = process.argv[2] || 'live-state.json';
   const input = readStdin();
@@ -173,4 +200,4 @@ async function main() {
 }
 if (require.main === module) main().catch(e => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) }) + '\n'); process.exit(1); });
 
-module.exports = { ordersFor, exitOnly, takeProfit, flattenOrders, withoutOurs, withoutResting, queueShield };
+module.exports = { ordersFor, exitOnly, takeProfit, flattenOrders, withoutOurs, withoutResting, queueShield, imbalance, takerFlow, flowGuard };

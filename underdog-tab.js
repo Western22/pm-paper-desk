@@ -19,10 +19,17 @@
     $('udWin').className = 'v ' + (s.winRate == null ? 'dim' : s.winRate > s.avgPrice ? 'pos' : 'neg');
     $('udStreak').textContent = `${s.worstStreak || 0} · $${(s.maxDrawdown || 0).toFixed(2)}`;
     $('udDd').textContent = 'losses in a row · deepest dip from the high';
+    const k = s.sized || {};
+    $('udK').textContent = k.bankroll == null ? '—' : `$${k.bankroll.toFixed(2)}`;
+    $('udK').className = 'v ' + cls(k.pnl);
+    $('udK2').textContent = `${usd(k.pnl)} · ${k.settled || 0} settled, ${k.open || 0} open · ${k.roi == null ? '—' : pct(k.roi)} per $`;
+    $('udM').textContent = k.settled ? `${k.actualWins} vs ${k.predictedWins} wins` : '—';
+    $('udM2').textContent = k.settled ? `P&L ${usd(k.pnl)} vs expected ${usd(k.expectedPnl)}` : 'fills in as sized bets settle';
     $('udRows').innerHTML = (d.bets || []).map(b => `<tr><td class="dim">${new Date(b.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
       <td>${esc(b.q)} <span class="dim">· ${esc(b.type)}</span></td><td>${esc(b.side)}</td><td class="mono">${(+b.price).toFixed(3)}</td>
+      <td class="mono">${b.edge == null ? '—' : pct(b.edge)}</td><td class="mono">${b.kstake ? '$' + b.kstake.toFixed(2) : '—'}</td>
       <td class="${b.status === 'won' ? 'pos' : b.status === 'lost' ? 'neg' : 'dim'}">${esc(b.status)}</td><td class="mono ${cls(b.pnl)}">${b.pnl == null ? '—' : usd(b.pnl)}</td></tr>`).join('')
-      || '<tr><td colspan="6" class="dim">No bets yet — the runner scans every 30 min.</td></tr>';
+      || '<tr><td colspan="8" class="dim">No bets yet — the runner scans every 30 min.</td></tr>';
     $('udLog').innerHTML = (d.log || []).map(l => `<div><span class="dim">${new Date(l.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span> ${esc(l.t)}</div>`).join('');
   }
 

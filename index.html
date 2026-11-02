@@ -175,9 +175,11 @@
       <div class="panel kpi"><label>Settled · open</label><div class="v" id="udCount">—</div><div class="s" id="udBets">—</div></div>
       <div class="panel kpi"><label>Win rate vs price</label><div class="v" id="udWin">—</div><div class="s" id="udExp">edge = win rate above the average price paid</div></div>
       <div class="panel kpi"><label>Worst losing streak · drawdown</label><div class="v" id="udStreak">—</div><div class="s" id="udDd">—</div></div>
+      <div class="panel kpi"><label>Quant book ($50, half-Kelly, 1 per game)</label><div class="v" id="udK">—</div><div class="s" id="udK2">calibrated probability → edge → stake</div></div>
+      <div class="panel kpi"><label>Model check: predicted vs actual</label><div class="v" id="udM">—</div><div class="s" id="udM2">wins and P&amp;L the model expected vs what happened</div></div>
     </div>
     <div class="grid g-2">
-      <div class="panel"><div class="ph"><h3>Bets</h3></div><div class="pb scroll" style="max-height:480px"><table class="tbl"><thead><tr><th>Placed</th><th>Market</th><th>Side</th><th>Price</th><th>Status</th><th>P&amp;L</th></tr></thead><tbody id="udRows"></tbody></table></div></div>
+      <div class="panel"><div class="ph"><h3>Bets</h3></div><div class="pb scroll" style="max-height:480px"><table class="tbl"><thead><tr><th>Placed</th><th>Market</th><th>Side</th><th>Price</th><th>Edge</th><th>Sized</th><th>Status</th><th>P&amp;L</th></tr></thead><tbody id="udRows"></tbody></table></div></div>
       <div class="panel"><div class="ph"><h3>Runner log</h3></div><div class="pb scroll mono" id="udLog" style="max-height:480px;font-size:11px;line-height:1.6"></div></div>
     </div>
   </section>

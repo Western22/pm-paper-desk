@@ -105,10 +105,54 @@ def log(*a):
     print(time.strftime("%H:%M:%S"), line, flush=True)
 
 
+# Polymarket retired Data API v1 (410 "Data API v1 has been retired"). v2 lives under /v2, wraps results in
+# {"data": …}, is snake_case and filters by condition= instead of market=. Callers keep v1 URLs/field names.
+V2_FIELDS = {
+    "proxy_wallet": "proxyWallet",
+    "token_id": "asset",
+    "condition_id": "conditionId",
+    "usdc_size": "usdcSize",
+    "current_size": "size",
+    "avg_price": "avgPrice",
+    "current_price": "curPrice",
+    "realized_pnl": "realizedPnl",
+    "unrealized_pnl": "cashPnl",
+    "outcome_index": "outcomeIndex",
+}
+
+
+def to_v2(url):
+    if not url.startswith(DATA + "/") or url.startswith(DATA + "/v2/"):
+        return url
+    u = urllib.parse.urlsplit(url.replace(DATA + "/v1/", DATA + "/"))
+    q = urllib.parse.parse_qsl(u.query)
+    q = [("condition" if k == "market" else k, v) for k, v in q]
+    return urllib.parse.urlunsplit(
+        (u.scheme, u.netloc, "/v2" + u.path, urllib.parse.urlencode(q), "")
+    )
+
+
+def from_v2(body):
+    d = body.get("data", body) if isinstance(body, dict) else body
+
+    def fix(o):
+        if not isinstance(o, dict):
+            return o
+        out = dict(o)
+        for k, v in o.items():
+            if k in V2_FIELDS and V2_FIELDS[k] not in out:
+                out[V2_FIELDS[k]] = v
+        return out
+
+    return [fix(x) for x in d] if isinstance(d, list) else fix(d)
+
+
 def get_json(url, timeout=10):
-    req = urllib.request.Request(url, headers={"user-agent": "liquidity-desk-live/2.0"})
+    v2 = to_v2(url)
+    req = urllib.request.Request(v2, headers={"user-agent": "liquidity-desk-live/2.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.load(r)
+        body = json.load(r)
+    return from_v2(body) if v2 != url else body
 
 
 def fetch_positions():

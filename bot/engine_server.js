@@ -234,6 +234,12 @@ async function tick() {
       // sell-immediately; once flat, the market sits out a few minutes before quoting again
       for (const [tok, h] of [[yes, yesHeld], [no, noHeld]]) {
         const f = flat.get(tok); if (!f || h >= 5) continue;
+        // a partial fill under the 5-share order minimum can't be sold: keep quoting (no sit-out) so the rest of
+        // the order can fill, then the whole position (≥ 5) is sold at once. Only a truly flat book clears + cools.
+        if (h >= 1) {
+          if (!f.dust) { f.dust = true; E.log(s, `[${ms.meta.question.slice(0, 28)}] PARTIAL FILL — ${h.toFixed(1)} shares is below the 5-share minimum: keeping the order up so it can fill to a sellable size`, 'g'); }
+          continue;
+        }
         if (Date.now() - f.at > 15000) { // flat (positions caught up): clear and cool
           flat.delete(tok);
           ms.coolUntil = Math.max(ms.coolUntil || 0, Date.now() + FLAT_COOL_MIN * 60000);

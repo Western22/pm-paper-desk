@@ -227,3 +227,30 @@ async def main():
 
 
 asyncio.run(main())
+
+
+async def stale():
+    # holdings feed down > 5 min → cancel everything once and stop syncing until it's back
+    lr.LIVE = True
+    ex = lr.Executor()
+    ex.have_pos = True
+    ex.pos_ok_at = lr.time.time() - 400
+    ex.resting = {("Y", "BUY", 0.4, 20): {"id": "o1", "market": "m", "token": "Y"}}
+    cancelled = []
+
+    async def cancel_all(why):
+        cancelled.append(why)
+        ex.resting.clear()
+
+    ex.cancel_all = cancel_all
+    try:
+        await ex.on_orders({"orders": [{"token": "Y", "side": "BUY", "price": 0.4, "size": 20}]})
+        assert cancelled and "holdings feed down" in cancelled[0] and not ex.resting
+        await ex.on_orders({"orders": [{"token": "Y", "side": "BUY", "price": 0.4, "size": 20}]})
+        assert len(cancelled) == 1, "only once"
+    finally:
+        lr.LIVE = False
+    print("stale holdings guard ok")
+
+
+asyncio.run(stale())

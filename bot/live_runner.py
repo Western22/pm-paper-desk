@@ -74,6 +74,9 @@ ENGINE_PARAMS = {
 }
 # holdings poll; fills arrive instantly on the user stream, so 10 s is plenty (5 s hit data-api 429s)
 POS_SEC = float(os.environ.get("POS_SEC", "10"))
+POS_STALE_SEC = float(
+    os.environ.get("POS_STALE_SEC", "300")
+)  # holdings feed down this long → cancel all
 RECONCILE_SEC = 60.0
 DASH_HOST = os.environ.get(
     "DASH_HOST", "127.0.0.1"
@@ -831,6 +834,19 @@ class Executor:
     async def on_orders(self, m):
         if not self.have_pos or self.blocked:
             return
+        # never trade blind: if the holdings feed has been failing for 5 min (Nov 2026: data-api v1 → 410 for
+        # days while orders kept resting), pull everything until it's back
+        if (
+            LIVE
+            and time.time() - getattr(self, "pos_ok_at", time.time()) > POS_STALE_SEC
+        ):
+            if self.resting or not getattr(self, "_stale_pulled", False):
+                self._stale_pulled = True
+                await self.cancel_all(
+                    f"holdings feed down > {POS_STALE_SEC // 60:.0f} min — not trading blind"
+                )
+            return
+        self._stale_pulled = False
         orders = m["orders"]
         self.markets = m.get("markets") or self.markets
         cost = sum(o["price"] * o["size"] for o in orders if o["side"] == "BUY")
@@ -1057,6 +1073,7 @@ class Executor:
                     }
                 )
                 self.have_pos = True
+                self.pos_ok_at = time.time()
             except Exception as e:  # noqa: BLE001 — positions are retried; orders wait until we have them
                 if (
                     "429" in str(e)

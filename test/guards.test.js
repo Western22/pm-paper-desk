@@ -225,3 +225,21 @@ console.log('guards ok');
   assert.strictEqual(flattenOrders(ms, [], { WY: 25 }, flat, () => 0.16)[0].price, 0.16);
   console.log('flatten floor ok');
 }
+
+// 15) event already under way / decided → exit-only; 4 Nov leaks caught by the filter
+{
+  const s = E.freshState(50); s.P.live = true;
+  const m1 = P.newMarketState(mk('E', 'Will the 2026 New York City Marathon winner finish in 2:22:00 or faster?', 'nycm'), model, now, 20);
+  m1.gameStart = now - 3600e3;
+  assert.strictEqual(E.eventLive(m1, now), 'event under way');
+  const m2 = P.newMarketState(mk('F', 'Will BTC close above $200k?', 'b7'), model, now, 20);
+  assert.strictEqual(E.eventLive(m2, now), null);
+  m2.lastMid = 0.03; assert(/pinned/.test(E.eventLive(m2, now)));
+  m2.lastMid = 0.5; m2.resolving = 'proposed'; assert(/resolution proposed/.test(E.eventLive(m2, now)));
+  s.P.headlineFilter = 0; m2.resolving = null; m2.gameStart = now + 864e5;
+  assert.strictEqual(E.exitOnlyReason(s, m2, now), null);
+  m2.gameStart = now + 5 * 60000; assert.strictEqual(E.exitOnlyReason(s, m2, now), 'event under way', '10 min before start counts');
+  for (const q of ['Will Rachel Campos-Duffy be the next White House Press Secretary?', 'Will the 2026 New York City Marathon Women\'s Open Division winner finish in 2:22:00 or faster?'])
+    assert(E.isHeadline(q), q);
+  console.log('event-live guard ok');
+}

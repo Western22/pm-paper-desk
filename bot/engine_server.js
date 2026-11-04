@@ -122,6 +122,7 @@ function connect() {
     info(`ws open · ${subscribed.size} books`);
   };
   ws.onmessage = ev => {
+    lastWsMsg = Date.now();
     const raw = String(ev.data); if (raw === 'PONG') return;
     let msgs; try { msgs = JSON.parse(raw); } catch (e) { return; }
     for (const m of Array.isArray(msgs) ? msgs : [msgs]) {
@@ -169,6 +170,9 @@ function resubscribe() {
   if (add.length || del.length) info(`ws resubscribed +${add.length} −${del.length}`);
 }
 setInterval(() => { if (ws && ws.readyState === 1) ws.send('PING'); }, 10000);
+// watchdog: a socket can go silent without closing — then books go stale and the fast pulls stop. Silent > 60 s → reconnect.
+let lastWsMsg = Date.now();
+setInterval(() => { if (ws && ws.readyState === 1 && subscribed.size && Date.now() - lastWsMsg > 60000) { info('ws silent > 60 s · reconnecting'); lastWsMsg = Date.now(); try { ws.close(); } catch (e) { /* onclose reconnects */ } } }, 15000);
 
 // ---------------------------------------------------------------- inputs from the executor
 readline.createInterface({ input: process.stdin }).on('line', line => {

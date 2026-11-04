@@ -72,13 +72,17 @@ function takeProfit(ms, orders, held, winners, bestBid, minC = +(process.env.TAK
  *  10–27¢ against us within hours. So shares bought by a fill (`flat`: token → fill info, set by the engine on a
  *  BUY fill) are sold at once to the live best bid (taker), and that token's buys are dropped until it's flat.
  *  Cost: the spread (~1–3¢/share) instead of the drift. */
-function flattenOrders(ms, orders, held, flat, bestBid) {
+function flattenOrders(ms, orders, held, flat, bestBid, slipC = +(process.env.FLATTEN_SLIP_C || 6)) {
   let out = orders;
   for (const t of ms.meta.tokens.map(x => String(x.id))) {
     const n = Math.floor(held[t] || 0), bid = bestBid(t);
     if (!flat || !flat.has(t) || n < MIN_ORDER || !(bid > 0)) continue;
+    // never dump: sell at the bid only down to fill − slip; below that, wait there as an ask (4 Nov: with no
+    // floor this sold an 18¢ fill at 1.2¢ and a 31¢ fill at 18¢ into an empty book)
+    const f = flat.get(t), floor = f && f.price > 0 ? Math.max(0.01, Math.floor((f.price - slipC / 100) * 100) / 100) : 0.01;
+    const px = Math.max(bid, floor);
     out = out.filter(o => o.token !== t);
-    out.push({ market: ms.meta.id, question: ms.meta.question, token: t, side: 'SELL', price: +bid.toFixed(4), size: n, leg: 'flatten', taker: true });
+    out.push({ market: ms.meta.id, question: ms.meta.question, token: t, side: 'SELL', price: +px.toFixed(4), size: n, leg: 'flatten', taker: true });
   }
   return out;
 }

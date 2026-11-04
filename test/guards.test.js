@@ -213,3 +213,15 @@ console.log('guards ok');
   assert.strictEqual(E.applyRewardScale({ rate: 50 }, { live: false, rewardScale: 0.1 }).rate, 50, 'paper untouched');
   console.log('reward calibration ok');
 }
+
+// 14) sell-immediately never dumps: bought 25 @0.18, best bid 0.0115 → sell order at the 0.12 floor, not 0.0115
+{
+  const { flattenOrders } = require('../bot/decide.js');
+  const ms = P.newMarketState(mk('W', 'Will X be the next press secretary?', 'ps'), model, now, 20);
+  const flat = new Map([['WY', { price: 0.18, at: now }]]);
+  const o = flattenOrders(ms, [], { WY: 25 }, flat, () => 0.0115);
+  assert.deepStrictEqual(o.map(x => [x.side, x.price, x.size]), [['SELL', 0.12, 25]]);
+  // normal case: bid within the slip → sell at the bid
+  assert.strictEqual(flattenOrders(ms, [], { WY: 25 }, flat, () => 0.16)[0].price, 0.16);
+  console.log('flatten floor ok');
+}
